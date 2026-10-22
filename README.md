@@ -2,7 +2,7 @@
 
 一个带网页界面的独立软件：输入已有的 EPUB（主要是中文书），借助规则引擎 + 大模型辅助，输出结构规范、排版精良的 EPUB 3。目标是任意符合 EPUB 3 规范的阅读系统，不绑定具体阅读器，不做格式转换。
 
-当前阶段：**规范完成，开发环境就绪，内核（M0）开发中**。
+当前阶段：**M0 内核可用**：读写 EPUB、规则引擎、EPUB 2→3 升级与第一批自动修复规则；22 本样本 epubcheck 错误 1117 → 9（剩余均为厂商私有属性，按策略需用户确认清除），全部幂等、可见文字不变。
 
 ## 目录
 
@@ -26,6 +26,15 @@ docker compose -f compose.dev.yml build            # 首次构建
 docker compose -f compose.dev.yml run --rm dev pytest
 docker compose -f compose.dev.yml run --rm dev epubcheck book.epub
 ```
+
+命令行（M0，供测试与批量验收；正式界面是网页）：
+
+```sh
+docker compose -f compose.dev.yml run --rm dev python -m epub_typesetter audit book.epub
+docker compose -f compose.dev.yml run --rm dev python -m epub_typesetter fix book.epub -o out.epub --epubcheck
+```
+
+`fix` 只应用确定性的 `auto` 级修复，输出修改记录、修复前后问题数、可见文字是否一致，以及（加 `--epubcheck` 时）epubcheck 错误数对比。
 
 ## 已确定的方向（2026-10-22）
 

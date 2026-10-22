@@ -1,0 +1,10 @@
+# 运行：docker compose up -d --build   然后访问 http://127.0.0.1:8780
+services:
+  web:
+    build: .
+    image: epub-typesetter
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8780:8000"
+    volumes:
+      - ./data:/data

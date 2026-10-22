@@ -1,4 +1,5 @@
 # 用法：docker compose -f compose.dev.yml run --rm dev <命令>
+name: epub-typesetter-dev
 services:
   dev:
     build:

@@ -15,7 +15,7 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY pyproject.toml ./
-RUN pip install --no-cache-dir lxml cssselect tinycss2 fonttools brotli pillow pytest
+RUN pip install --no-cache-dir lxml cssselect tinycss2 fonttools brotli pillow pytest fastapi uvicorn python-multipart httpx
 ENV PYTHONPATH=/app/src \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8

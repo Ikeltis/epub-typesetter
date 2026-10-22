@@ -26,16 +26,19 @@ def available() -> bool:
     return shutil.which('epubcheck') is not None
 
 
-def run(epub_path: str, timeout: int = 600) -> list[Message] | None:
+def run(epub_path: str, timeout: int = 600, locale: str | None = None) -> list[Message] | None:
     if not available():
         return None
     with tempfile.TemporaryDirectory() as td:
         out = os.path.join(td, 'out.json')
-        subprocess.run(['epubcheck', epub_path, '--json', out, '-q'],
-                       capture_output=True, timeout=timeout)
+        cmd = ['epubcheck', epub_path, '--json', out, '-q']
+        if locale:
+            cmd += ['--locale', locale]          # 如 zh-TW：epubcheck 自带繁体中文消息
+        subprocess.run(cmd, capture_output=True, timeout=timeout)
         if not os.path.exists(out):
             return None
-        data = json.load(open(out, encoding='utf-8'))
+        with open(out, encoding='utf-8') as f:
+            data = json.load(f)
     msgs = []
     for m in data.get('messages', []):
         locs = [f"{l.get('path')}:{l.get('line')}" for l in m.get('locations', [])]
@@ -43,12 +46,12 @@ def run(epub_path: str, timeout: int = 600) -> list[Message] | None:
     return msgs
 
 
-def run_bytes(data: bytes, timeout: int = 600) -> list[Message] | None:
+def run_bytes(data: bytes, timeout: int = 600, locale: str | None = None) -> list[Message] | None:
     with tempfile.NamedTemporaryFile(suffix='.epub', delete=False) as f:
         f.write(data)
         path = f.name
     try:
-        return run(path, timeout)
+        return run(path, timeout, locale)
     finally:
         os.unlink(path)
 

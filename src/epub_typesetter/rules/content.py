@@ -400,8 +400,7 @@ class ObsoleteMarkup(Rule):
         return c
 
     def check(self, book):
-        if not book.version.startswith('3'):
-            return []
+        # EPUB 2 书也报告：修复流程总会先升级到 EPUB 3，这些标记届时都不合法
         out = []
         for path in book.content_docs():
             root = book.tree(path).getroot()

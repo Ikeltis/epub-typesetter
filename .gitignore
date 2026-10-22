@@ -1,0 +1,20 @@
+# 版权材料与本地数据：不进仓库
+_book_src/
+_archive/
+testdata/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# 前端
+node_modules/
+dist/
+
+# 运行产物
+work/
+*.log
+.env

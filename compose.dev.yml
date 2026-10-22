@@ -1,0 +1,11 @@
+# 用法：docker compose -f compose.dev.yml run --rm dev <命令>
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+    image: epub-typesetter-dev
+    user: "${UID:-1000}:${GID:-1000}"
+    volumes:
+      - .:/app
+    working_dir: /app

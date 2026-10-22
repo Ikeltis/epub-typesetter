@@ -1,0 +1,21 @@
+# 开发/测试环境：Python + Java(epubcheck)。最终交付镜像以后另写。
+FROM python:3.13-slim-trixie
+
+ARG EPUBCHECK_VERSION=5.4.0
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends default-jre-headless curl unzip \
+ && curl -fsSL -o /tmp/epubcheck.zip \
+      https://github.com/w3c/epubcheck/releases/download/v${EPUBCHECK_VERSION}/epubcheck-${EPUBCHECK_VERSION}.zip \
+ && unzip -q /tmp/epubcheck.zip -d /opt \
+ && mv /opt/epubcheck-${EPUBCHECK_VERSION} /opt/epubcheck \
+ && printf '#!/bin/sh\nexec java -jar /opt/epubcheck/epubcheck.jar "$@"\n' > /usr/local/bin/epubcheck \
+ && chmod +x /usr/local/bin/epubcheck \
+ && rm /tmp/epubcheck.zip && apt-get purge -y curl unzip && apt-get autoremove -y \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY pyproject.toml ./
+RUN pip install --no-cache-dir lxml tinycss2 fonttools brotli pillow pytest
+ENV PYTHONPATH=/app/src \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8

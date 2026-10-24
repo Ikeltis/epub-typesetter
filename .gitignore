@@ -19,3 +19,7 @@ work/
 *.log
 .env
 data/
+
+# 进程崩溃转储（chromium 等），可能含内存中的敏感数据
+core
+core.[0-9]*

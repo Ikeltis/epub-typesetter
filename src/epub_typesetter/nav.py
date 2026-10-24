@@ -102,7 +102,7 @@ def _ol(entries: list[Entry], nav_path: str) -> str:
         href = Book.relative(nav_path, e.path) + (f'#{e.fragment}' if e.fragment else '')
         lines.append(f'<li><a href={quoteattr(href)}>{escape(e.label)}</a>')
     lines.append('</li>' + '</ol></li>' * (stack - 1) + '</ol>' if stack else '<ol><li><span>（无目录）</span></li></ol>')
-    return '\n'.join(lines)
+    return ''.join(lines)      # 不在 li 内留换行：否则空白规则（TXT-002）会在下一轮再改一次
 
 
 def build_nav(book: Book, nav_path: str, entries: list[Entry],

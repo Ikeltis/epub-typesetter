@@ -183,3 +183,45 @@ def test_duplicate_thead_becomes_tbody():
     b, _ = fixed(make_epub({'OEBPS/Text/c2.xhtml': XHTML11.format(title='二', body=body)}))
     t = b.tree('OEBPS/Text/c2.xhtml').getroot().find(f'.//{X}table')
     assert [c.tag.split('}')[1] for c in t] == ['thead', 'tbody', 'tbody', 'tbody']
+
+
+def test_ineffective_presentational_attrs_are_dropped_not_converted():
+    """回归：<p width="0pt" height="2em"> 在浏览器里从不生效；转成 CSS 会把段落压成 0 宽（《笑傲牛熊》事故）。"""
+    body = ('<h1>二</h1><p height="2em" width="0pt" align="center">甲</p>'
+            '<blockquote height="2em" width="0pt">乙</blockquote>'
+            '<table width="80%" cellpadding="4"><tr><td width="30" height="0">格</td></tr></table>'
+            '<p><img src="../Images/cover.jpg" width="420" height="255" align="baseline"/></p>')
+    b, _ = fixed(make_epub({'OEBPS/Text/c2.xhtml': XHTML11.format(title='二', body=body)}))
+    root = b.tree('OEBPS/Text/c2.xhtml').getroot()
+    p = root.find(f'.//{X}p')
+    assert p.get('style') == 'text-align: center'
+    bq = root.find(f'.//{X}blockquote')
+    assert bq.get('style') is None and bq.get('width') is None
+    assert root.find(f'.//{X}table').get('style') == 'width: 80%'
+    td = root.find(f'.//{X}td')
+    assert 'width: 30px' in td.get('style') and 'padding: 4px' in td.get('style') and 'height' not in td.get('style')
+    img = root.find(f'.//{X}img')
+    assert img.get('width') == '420' and img.get('style') is None and img.get('align') is None
+
+
+def test_epub3_with_opf2_metadata_and_wrong_lang():
+    opf = (make_epub.__globals__['OPF2'].replace('version="2.0"', 'version="3.0"')
+           .replace('<meta name="cover" content="cover-img"/>',
+                    '<meta name="cover" content="cover-img"/><meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>'))
+    c2 = ('<?xml version="1.0"?><!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">'
+          '<head><title>二</title></head><body><h1>第二章</h1><p>这是中文正文，很长很长。</p></body></html>')
+    b, _ = fixed(make_epub({'OEBPS/content.opf': opf, 'OEBPS/Text/c2.xhtml': c2}))
+    creator = b.opf.find('opf:metadata/dc:creator', NS)
+    assert not any(k.startswith('{%s}' % NS['opf']) for k in creator.attrib)
+    assert b.tree('OEBPS/Text/c2.xhtml').getroot().get('lang') == 'zh'
+
+
+@pytest.mark.skipif(not shutil.which('chromium'), reason='需要 chromium')
+def test_layout_check_catches_squashed_paragraphs():
+    from epub_typesetter.layoutcheck import compare_layout
+    long_p = '<p>' + '这是一段足够长的中文正文，用来检验版面是否被压扁。' * 20 + '</p>'
+    good = make_epub({'OEBPS/Text/c2.xhtml': XHTML11.format(title='二', body='<h1>二</h1>' + long_p * 6)})
+    bad = make_epub({'OEBPS/Text/c2.xhtml': XHTML11.format(
+        title='二', body='<h1>二</h1>' + long_p.replace('<p>', '<p style="width: 0pt">') * 6)})
+    assert compare_layout(good, good).ok
+    assert not compare_layout(good, bad).ok

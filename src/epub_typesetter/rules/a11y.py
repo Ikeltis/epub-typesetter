@@ -6,7 +6,7 @@ import re
 from ..book import NS
 from ..engine import AUTO, ERROR, INFO, LLM, SUGGEST, WARNING, Rule, register
 from ..upgrade import _meta, book_language
-from ..xhtml import HEADINGS, X, XML_LANG, body, text_of
+from ..xhtml import HAN, HEADINGS, X, XML_LANG, body, text_of
 
 FILENAME_ALT = re.compile(r'\.(jpe?g|png|gif|webp|svg)$|^(图片?|插图|image|img\d*|pic\d*|\d+)$', re.I)
 LANG_FIX = {'zho': 'zh', 'chi': 'zh', 'zh_cn': 'zh-CN', 'zh_tw': 'zh-TW', 'cn': 'zh', 'chs': 'zh-Hans',
@@ -56,6 +56,13 @@ class ImageAlt(Rule):
         return log
 
 
+def _han_ratio(root) -> float:
+    text = re.sub(r'\s+', '', ''.join(body(root).itertext()))[:5000]
+    if not text:
+        return 0.0
+    return len(re.findall(f'[{HAN}]', text)) / len(text)
+
+
 def normalize_lang(v: str) -> str:
     v = v.strip()
     return LANG_FIX.get(v.lower(), v)
@@ -73,13 +80,15 @@ class Language(Rule):
         lang = (el.text or '').strip()
         if normalize_lang(lang) != lang or not BCP47.match(lang):
             out.append(self.issue(WARNING, f'dc:language 不规范：{lang}', book.opf_path, AUTO, kind='opf'))
-        missing = []
+        book_lang = normalize_lang(lang)
         for path in book.content_docs():
             root = book.tree(path).getroot()
             if not root.get('lang') or not root.get(XML_LANG) or root.get('lang') != root.get(XML_LANG):
-                missing.append(path)
-        for path in missing:
-            out.append(self.issue(WARNING, '根元素缺 lang/xml:lang 或两者不一致', path, AUTO, kind='doc'))
+                out.append(self.issue(WARNING, '根元素缺 lang/xml:lang 或两者不一致', path, AUTO, kind='doc'))
+            elif book_lang.startswith('zh') and not root.get('lang', '').lower().startswith(('zh', 'ja', 'ko', 'lzh')) \
+                    and _han_ratio(root) > 0.3:
+                # 中文正文被标成 en 等：阅读器会按西文选字体、断行
+                out.append(self.issue(WARNING, f'正文是中文，却标为 lang="{root.get("lang")}"', path, AUTO, kind='doc-wrong'))
         return out
 
     def fix(self, book, issues):
@@ -94,10 +103,10 @@ class Language(Rule):
         lang = normalize_lang(book_language(book))
         n = 0
         for i in issues:
-            if i.data.get('kind') != 'doc':
+            if i.data.get('kind') not in ('doc', 'doc-wrong'):
                 continue
             root = book.tree(i.file).getroot()
-            v = root.get('lang') or root.get(XML_LANG) or lang
+            v = lang if i.data['kind'] == 'doc-wrong' else (root.get('lang') or root.get(XML_LANG) or lang)
             v = normalize_lang(v)
             root.set('lang', v)
             root.set(XML_LANG, v)

@@ -1,9 +1,9 @@
-# 开发/测试环境：Python + Java(epubcheck)。最终交付镜像以后另写。
+# 开发/测试环境：Python + Java(epubcheck) + chromium（版面回归对比）。交付镜像见根目录 Dockerfile。
 FROM python:3.13-slim-trixie
 
 ARG EPUBCHECK_VERSION=5.4.0
 RUN apt-get update \
- && apt-get install -y --no-install-recommends default-jre-headless curl unzip \
+ && apt-get install -y --no-install-recommends default-jre-headless curl unzip chromium fonts-noto-cjk \
  && curl -fsSL -o /tmp/epubcheck.zip \
       https://github.com/w3c/epubcheck/releases/download/v${EPUBCHECK_VERSION}/epubcheck-${EPUBCHECK_VERSION}.zip \
  && unzip -q /tmp/epubcheck.zip -d /opt \

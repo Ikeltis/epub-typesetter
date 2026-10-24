@@ -203,9 +203,32 @@ DATA_ATTR_OK = re.compile(r'^data-[a-z0-9_.\-\u00b7\u00c0-\uffff]+$')
 LIST_TAGS = (X + 'ul', X + 'ol')
 
 
-def _px(v: str) -> str:
-    v = v.strip()
-    return v + 'px' if re.fullmatch(r'\d+(\.\d+)?', v) else v
+def _tags(*names) -> set[str]:
+    return {X + n for n in names}
+
+
+# 依据 HTML 规范「Rendering → presentational hints」：只有下列 元素+属性 组合真正会被浏览器渲染。
+# 不在表里的组合（如 <p width="0pt">）一直被忽略，转成 CSS 反而会「生效」而毁掉版面，所以只删除不转换。
+ALIGN_TEXT = _tags('div', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'caption', 'legend',
+                   'thead', 'tbody', 'tfoot', 'tr', 'td', 'th')
+ALIGN_REPLACED = _tags('img', 'object', 'embed', 'iframe', 'input')
+WIDTH_EFFECT = _tags('table', 'td', 'th', 'col', 'colgroup', 'hr')
+HEIGHT_EFFECT = _tags('table', 'tr', 'td', 'th')
+BG_EFFECT = _tags('body', 'table', 'thead', 'tbody', 'tfoot', 'tr', 'td', 'th')
+SPACE_EFFECT = _tags('img', 'object', 'embed', 'iframe', 'input')
+BORDER_EFFECT = _tags('img', 'object')
+VALIGN_EFFECT = _tags('col', 'colgroup', 'thead', 'tbody', 'tfoot', 'tr', 'td', 'th')
+NOWRAP_EFFECT = _tags('td', 'th')
+VERTICAL = {'top': 'top', 'middle': 'middle', 'absmiddle': 'middle', 'center': 'middle', 'bottom': 'bottom',
+            'absbottom': 'bottom', 'baseline': 'baseline', 'texttop': 'text-top'}
+
+
+def _dimension(v: str) -> str | None:
+    """HTML 尺寸属性的解析规则：取开头的数字，可带 %；其他单位被浏览器忽略、按像素算。0 视为无效。"""
+    m = re.match(r'\s*(\d+(?:\.\d+)?)\s*(%?)', v or '')
+    if not m or float(m.group(1)) == 0:
+        return None
+    return m.group(1) + ('%' if m.group(2) else 'px')
 
 
 def _add_style(el, decl: str) -> None:
@@ -213,61 +236,99 @@ def _add_style(el, decl: str) -> None:
     el.set('style', f'{cur}; {decl}' if cur else decl)
 
 
+def _attr_css(el, a: str, v: str) -> tuple[bool, str | None]:
+    """返回 (是否要删除该属性, 要追加的 CSS 或 None)。不需要处理时返回 (False, None)。"""
+    tag, lv = el.tag, v.strip().lower()
+    if a == 'align':
+        if tag == X + 'table':
+            return True, (f'float: {lv}' if lv in ('left', 'right')
+                          else 'margin-left: auto; margin-right: auto' if lv == 'center' else None)
+        if tag in ALIGN_REPLACED:
+            return True, (f'float: {lv}' if lv in ('left', 'right')
+                          else f'vertical-align: {VERTICAL[lv]}' if lv in VERTICAL and lv != 'baseline' else None)
+        if tag == X + 'hr':
+            return True, {'left': 'margin-left: 0; margin-right: auto', 'right': 'margin-left: auto; margin-right: 0',
+                          'center': 'margin-left: auto; margin-right: auto'}.get(lv)
+        if tag in ALIGN_TEXT:
+            if tag == X + 'caption' and lv in ('top', 'bottom'):
+                return True, f'caption-side: {lv}'
+            lv = 'center' if lv == 'middle' else lv
+            return True, (f'text-align: {lv}' if lv in ('left', 'right', 'center', 'justify') else None)
+        return True, None
+    if a in ('width', 'height'):
+        if tag in EMBEDDED:
+            if re.fullmatch(r'\d+', v.strip()):
+                return False, None                          # 合法：整数像素
+            d = _dimension(v)
+            if d and d.endswith('px'):
+                el.set(a, d[:-2].split('.')[0])             # 「100px」→ 100
+                return False, None
+            return True, (f'{a}: {d}' if d else None)       # 百分比等 → CSS
+        effect = WIDTH_EFFECT if a == 'width' else HEIGHT_EFFECT
+        if tag in effect:
+            d = _dimension(v)
+            return True, (f'{a}: {d}' if d else None)
+        if tag in (X + 'canvas', X + 'svg') or tag.startswith('{%s}' % NS['svg']):
+            return False, None
+        return True, None                                    # 对其他元素从未生效
+    if a == 'valign':
+        return True, (f'vertical-align: {VERTICAL.get(lv, lv)}' if tag in VALIGN_EFFECT and lv in VERTICAL else None)
+    if a == 'bgcolor':
+        return True, (f'background-color: {v.strip()}' if tag in BG_EFFECT and v.strip() else None)
+    if a == 'background':
+        return True, (f'background-image: url("{v.strip()}")' if tag in BG_EFFECT and v.strip() else None)
+    if a == 'cellspacing':
+        d = _dimension(v) or '0px'
+        return True, (f'border-spacing: {d}' if tag == X + 'table' else None)
+    if a == 'border':
+        if tag == X + 'table':
+            if lv in ('', '1'):
+                return False, None                          # HTML5 仍允许 border="1"/""
+            d = _dimension(v)
+            return True, (f'border: {d} outset' if d else None)
+        if tag in BORDER_EFFECT:
+            d = _dimension(v)
+            return True, (f'border: {d} solid' if d else None)
+        return True, None
+    if a in ('hspace', 'vspace'):
+        d = _dimension(v)
+        if tag not in SPACE_EFFECT or not d:
+            return True, None
+        return True, (f'margin-left: {d}; margin-right: {d}' if a == 'hspace' else f'margin-top: {d}; margin-bottom: {d}')
+    if a == 'clear':
+        return True, (f'clear: {"both" if lv == "all" else lv}' if tag == X + 'br' and lv in ('left', 'right', 'all', 'both')
+                      else None)
+    if a == 'nowrap':
+        return True, ('white-space: nowrap' if tag in NOWRAP_EFFECT else None)
+    if a == 'type' and tag in (X + 'ul', X + 'li'):
+        return True, f'list-style-type: {LIST_TYPES.get(v.strip(), LIST_TYPES.get(lv, "disc"))}'
+    if a == 'name' and tag == X + 'a':
+        if not el.get('id'):
+            el.set('id', v)
+        return True, None
+    if a == 'cellpadding':
+        return True, None                                   # 由 _apply_cellpadding 处理
+    if a in ('charset', 'language') and tag in (X + 'a', X + 'link', X + 'script'):
+        return True, None
+    return False, None
+
+
+def _apply_cellpadding(table) -> None:
+    d = _dimension(table.get('cellpadding', ''))
+    if d:
+        for cell in table.iter(X + 'td', X + 'th'):
+            if 'padding' not in (cell.get('style') or ''):
+                _add_style(cell, f'padding: {d}')
+
+
 def _attr_to_css(el) -> list[str]:
-    """把一个元素上的废弃属性转成 style，返回处理掉的属性名。"""
+    """处理一个元素上的废弃属性：有渲染效果的转成等效 CSS，没有效果的直接删。返回处理掉的属性名。"""
     done = []
-    tag = el.tag
+    if el.tag == X + 'table' and el.get('cellpadding') is not None:
+        _apply_cellpadding(el)
     for a in list(el.attrib):
-        v = el.get(a)
-        css = None
-        if a == 'align':
-            if tag in (X + 'img', X + 'table') and v.lower() in ('left', 'right'):
-                css = f'float: {v.lower()}'
-            elif tag == X + 'table' and v.lower() == 'center':
-                css = 'margin-left: auto; margin-right: auto'
-            elif v.lower() in ('left', 'right', 'center', 'justify'):
-                css = f'text-align: {v.lower()}'
-        elif a == 'valign':
-            css = f'vertical-align: {v.lower()}'
-        elif a == 'bgcolor':
-            css = f'background-color: {v}'
-        elif a in ('width', 'height'):
-            if tag in EMBEDDED and re.fullmatch(r'\d+', v.strip()):
-                continue                                   # 合法：嵌入元素的整数像素
-            if tag in EMBEDDED and re.fullmatch(r'\d+px', v.strip()):
-                el.set(a, v.strip()[:-2])
-                done.append(a)
-                continue
-            css = f'{a}: {_px(v)}' if v.strip() else None
-        elif a == 'cellspacing':
-            css = f'border-spacing: {_px(v)}'
-        elif a == 'cellpadding':
-            css = None                                     # 需作用在 td 上，这里只删除（多为 0）
-        elif a == 'border' and tag != X + 'table':
-            css = f'border-width: {_px(v)}; border-style: solid' if v.strip() not in ('', '0') else None
-        elif a == 'border' and tag == X + 'table':
-            if v.strip() in ('', '1'):
-                continue
-            css = 'border: 1px solid' if v.strip() not in ('0',) else None
-        elif a in ('hspace', 'vspace'):
-            m = _px(v)
-            css = f'margin-left: {m}; margin-right: {m}' if a == 'hspace' else f'margin-top: {m}; margin-bottom: {m}'
-        elif a == 'clear' and tag == X + 'br':
-            css = f'clear: {"both" if v.lower() == "all" else v.lower()}'
-        elif a == 'nowrap':
-            css = 'white-space: nowrap'
-        elif a == 'type' and tag in (X + 'ul', X + 'li'):
-            css = f'list-style-type: {LIST_TYPES.get(v, LIST_TYPES.get(v.lower(), "disc"))}'
-        elif a == 'background':
-            css = f'background-image: url({v})'
-        elif a == 'name' and tag == X + 'a':
-            if not el.get('id'):
-                el.set('id', v)
-        elif a == 'charset' and tag in (X + 'a', X + 'link', X + 'script'):
-            pass
-        elif a == 'language' and tag == X + 'script':
-            pass
-        else:
+        remove, css = _attr_css(el, a, el.get(a) or '')
+        if not remove:
             continue
         del el.attrib[a]
         if css:

@@ -10,7 +10,7 @@ from lxml import etree
 from ..book import NS, XHTML_TYPES, Book
 from ..engine import AUTO, ERROR, INFO, MANUAL, SUGGEST, WARNING, Rule, register
 from ..nav import NCX, ncx_path
-from ..upgrade import OPF, _meta, generate_nav, now_utc, upgrade_to_3
+from ..upgrade import OPF, _meta, generate_nav, now_utc, upgrade_metadata, upgrade_to_3
 from ..xhtml import references, rename_file, unique_path
 
 JUNK = re.compile(r'(^|/)(__MACOSX(/|$)|\.DS_Store$|Thumbs\.db$|desktop\.ini$|\.git/)', re.I)
@@ -130,6 +130,9 @@ class PackageMetadata(Rule):
                                   kind='upgrade'))
             return out      # 升级会处理其余元数据问题
         md = opf.find('opf:metadata', NS)
+        if any(k.startswith(OPF) for el in md if isinstance(el.tag, str) for k in el.attrib):
+            out.append(self.issue(ERROR, '元数据仍有 EPUB 2 写法（opf:role / opf:file-as / opf:scheme 等）',
+                                  book.opf_path, AUTO, kind='opf-attrs'))
         uid = opf.get('unique-identifier')
         ids = [e for e in md.findall('dc:identifier', NS)]
         if not ids:
@@ -151,6 +154,8 @@ class PackageMetadata(Rule):
         if 'upgrade' in kinds:
             return upgrade_to_3(book)
         log = []
+        if 'opf-attrs' in kinds:
+            log += upgrade_metadata(book)
         md = book.opf.find('opf:metadata', NS)
         if 'identifier' in kinds:
             el = etree.SubElement(md, '{%s}identifier' % NS['dc'])

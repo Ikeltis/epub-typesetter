@@ -10,3 +10,5 @@ services:
     volumes:
       - .:/app
     working_dir: /app
+    ulimits:
+      core: 0          # 禁止崩溃转储：曾有 chromium 崩溃把 core 文件写进仓库目录

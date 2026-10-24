@@ -9,7 +9,7 @@ import os
 import time
 from collections import Counter
 
-from epub_typesetter import engine, epubcheck
+from epub_typesetter import engine, epubcheck, layoutcheck
 from epub_typesetter.book import Book
 from epub_typesetter.textcheck import compare_text
 
@@ -34,6 +34,7 @@ def main():
         open(os.path.join(a.out, name), 'wb').write(out)
         again = engine.fix(Book.load(out))
         diff = compare_text(Book.load(original), Book.load(out))
+        layout = layoutcheck.compare_layout(original, out) if layoutcheck.available() else None
         before_msgs, after_msgs = epubcheck.run(path), epubcheck.run_bytes(out)
         for m in after_msgs or []:
             if m.severity in ('ERROR', 'FATAL'):
@@ -41,6 +42,8 @@ def main():
         row = dict(book=name[:24], err_before=epubcheck.blocking(before_msgs), err_after=epubcheck.blocking(after_msgs),
                    changes=len(rep.changes), issues_after=len(rep.after), idempotent=not again.changes,
                    text_equal=diff.equal, text_diff='' if diff.equal else diff.summary()[:120],
+                   layout_ok=None if layout is None else layout.ok,
+                   layout='' if layout is None or layout.ok else layout.summary()[:160],
                    secs=round(time.time() - t0, 1))
         if again.changes:
             row['again'] = [f'{r}:{l[:60]}' for r, l in again.changes[:3]]
@@ -51,7 +54,8 @@ def main():
         print(f'{n:5}  {i}  {msg}')
     tot = lambda k: sum(r[k] for r in rows)  # noqa: E731
     print(f'\n合计 {len(rows)} 本：error {tot("err_before")} → {tot("err_after")}；'
-          f'幂等 {sum(r["idempotent"] for r in rows)}/{len(rows)}；文字一致 {sum(r["text_equal"] for r in rows)}/{len(rows)}')
+          f'幂等 {sum(r["idempotent"] for r in rows)}/{len(rows)}；文字一致 {sum(r["text_equal"] for r in rows)}/{len(rows)}；'
+          f'版面正常 {sum(bool(r["layout_ok"]) for r in rows)}/{len(rows)}')
 
 
 if __name__ == '__main__':

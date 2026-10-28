@@ -8,7 +8,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 from .. import engine, epubcheck
 from ..book import NS, Book, EpubError
-from ..textcheck import compare_text
+from ..pipeline import optimize
+from ..rebuild import REMOVED_ROLES
+from ..textcheck import compare_blocks, compare_text
 from . import store
 
 EPUBCHECK_LOCALE = os.environ.get('EPUBTS_EPUBCHECK_LOCALE', 'zh-TW')
@@ -16,13 +18,13 @@ MAX_MESSAGES = 300
 _pool = ThreadPoolExecutor(max_workers=int(os.environ.get('EPUBTS_WORKERS', '2')))
 
 
-def submit(fn, pid: str) -> None:
-    _pool.submit(_guard, fn, pid)
+def submit(fn, pid: str, *args) -> None:
+    _pool.submit(_guard, fn, pid, *args)
 
 
-def _guard(fn, pid):
+def _guard(fn, pid, *args):
     try:
-        fn(pid)
+        fn(pid, *args)
     except EpubError as e:
         store.update(pid, status='error', message=f'无法作为 EPUB 读取：{e}')
     except Exception as e:  # noqa: BLE001  后台任务必须把错误落到状态里，否则前端会一直转圈
@@ -72,28 +74,54 @@ def audit(pid: str) -> None:
     store.update(pid, status='ready')
 
 
-def fix(pid: str) -> None:
+ROLE_NAMES = {'h1': '一级标题', 'h2': '二级标题', 'h3': '三级标题', 'para': '正文段落', 'figure': '插图',
+              'caption': '图注', 'source': '资料来源', 'bullet': '列表项', 'note': '注释', 'note-head': '注释小标题',
+              'toc': '书内目录页', 'junk': '广告/引流', 'meta': '版权信息', 'quote': '引文', 'right': '右对齐短行',
+              'center': '居中短行', 'keep': '表格等原样保留'}
+
+
+def fix(pid: str, mode: str = 'basic') -> None:
+    """mode='basic'：只做规范修复（M0，不改版面）；mode='rebuild'：语义分析+排版重建（M2）。"""
     store.update(pid, status='fixing', message='')
     original = open(store.path(pid, 'original.epub'), 'rb').read()
     book = Book.load(original)
-    rep = engine.fix(book)
-    out = book.to_bytes()
+    result = {'mode': mode}
+    if mode == 'rebuild':
+        orep = optimize(book)
+        rep = engine.FixReport(orep.fix.changes + orep.refix.changes, orep.fix.before, orep.refix.after)
+        out = book.to_bytes()
+        bc = compare_blocks(orep.analysis.blocks, REMOVED_ROLES, Book.load(out))
+        result['text'] = {'equal': bc.ok, 'length': bc.chars_before, 'summary': bc.summary(),
+                          'changes': [{'file': '', 'op': role, 'before': t[:80], 'after': ''}
+                                      for role, t in bc.missing[:50]]}
+        counts = orep.analysis.counts()
+        result['rebuild'] = {
+            'roles': [{'role': r, 'name': ROLE_NAMES.get(r, r), 'count': n} for r, n in counts.most_common()],
+            'files': len(orep.rebuild.chapters), 'notes': orep.rebuild.notes,
+            'vertical': orep.analysis.vertical,
+            'removed': [{'role': r, 'name': ROLE_NAMES.get(r, r), 'text': t[:120]} for r, t in orep.rebuild.removed[:300]],
+            'removed_total': len(orep.rebuild.removed),
+        }
+    else:
+        rep = engine.fix(book)
+        out = book.to_bytes()
+        diff = compare_text(Book.load(original), Book.load(out))
+        result['text'] = {'equal': diff.equal, 'length': diff.length, 'summary': diff.summary(),
+                          'changes': [{'file': f, 'op': op, 'before': a[:80], 'after': b[:80]}
+                                      for f, op, a, b in diff.changes[:50]]}
     tmp = store.path(pid, 'fixed.epub.tmp')
     with open(tmp, 'wb') as f:
         f.write(out)
     os.replace(tmp, store.path(pid, 'fixed.epub'))
-    diff = compare_text(Book.load(original), Book.load(out))
     msgs = epubcheck.run(store.path(pid, 'fixed.epub'), locale=EPUBCHECK_LOCALE)
-    store.write_json(pid, 'fix.json', {
+    result.update({
         'changes': [{'rule': r, 'text': t} for r, t in rep.changes],
         'before': _issues_report(rep.before),
         'after': _issues_report(rep.after),
-        'text': {'equal': diff.equal, 'length': diff.length, 'summary': diff.summary(),
-                 'changes': [{'file': f, 'op': op, 'before': a[:80], 'after': b[:80]}
-                             for f, op, a, b in diff.changes[:50]]},
         'epubcheck': _epubcheck_report(msgs),
         'size': len(out),
     })
+    store.write_json(pid, 'fix.json', result)
     store.update(pid, status='fixed')
 
 

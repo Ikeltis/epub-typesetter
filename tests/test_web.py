@@ -44,6 +44,11 @@ def test_full_flow(client):
     assert zipfile.ZipFile(io.BytesIO(r.content)).namelist()[0] == 'mimetype'
     assert "filename*=UTF-8''" in r.headers['content-disposition']
     assert any(b['id'] == pid for b in client.get('/api/books').json())
+    # 排版重建模式
+    assert client.post(f'/api/books/{pid}/fix?mode=rebuild').status_code == 202
+    d = wait(client, pid, done=('fixed', 'error'))
+    assert d['meta']['status'] == 'fixed', d['meta']['message']
+    assert d['fix']['mode'] == 'rebuild' and d['fix']['rebuild']['files'] >= 1 and d['fix']['text']['equal']
     assert client.delete(f'/api/books/{pid}').status_code == 204
     assert client.get(f'/api/books/{pid}').status_code == 404
 

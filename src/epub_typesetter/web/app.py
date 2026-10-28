@@ -67,12 +67,14 @@ def get_book(pid: str):
 
 
 @app.post('/api/books/{pid}/fix', status_code=202)
-def run_fix(pid: str):
+def run_fix(pid: str, mode: str = 'basic'):
     meta = _meta_or_404(pid)
+    if mode not in ('basic', 'rebuild'):
+        raise HTTPException(400, 'mode 只能是 basic 或 rebuild')
     if meta.status in ('queued', 'auditing', 'fixing'):
         raise HTTPException(409, '这本书正在处理中')
     store.update(pid, status='fixing')
-    jobs.submit(jobs.fix, pid)
+    jobs.submit(jobs.fix, pid, mode)
     return {'ok': True}
 
 

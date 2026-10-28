@@ -29,10 +29,10 @@ async function load() {
   if (busy.value) timer = setTimeout(load, 1500)
 }
 
-async function runFix() {
+async function runFix(mode) {
   try {
-    await api.fix(props.id)
-    tab.value = 'changes'
+    await api.fix(props.id, mode)
+    tab.value = mode === 'rebuild' ? 'rebuild' : 'changes'
     await load()
   } catch (e) { error.value = e.message }
 }
@@ -80,9 +80,10 @@ onUnmounted(() => clearTimeout(timer))
         <div class="row">
           <h2 style="margin:0">体检结果</h2>
           <span class="spacer"></span>
-          <button v-if="!fix" class="primary" :disabled="busy || !autoCount" @click="runFix">
-            应用自动修复（{{ autoCount }} 项）</button>
-          <button v-else :disabled="busy" @click="runFix">重新修复</button>
+          <button :disabled="busy" @click="runFix('basic')"
+                  title="只修规范错误与伪排版，不改变版面">仅规范修复</button>
+          <button class="primary" :disabled="busy" @click="runFix('rebuild')"
+                  title="识别标题、插图、注释等并重建为规范的 EPUB 3，套用统一排版主题">排版重建（推荐）</button>
         </div>
         <div class="row tiles">
           <StatTile label="epubcheck 错误" :value="audit.epubcheck.available ? audit.epubcheck.blocking : '—'"
@@ -95,7 +96,7 @@ onUnmounted(() => clearTimeout(timer))
 
       <section v-if="fix && !busy" class="card">
         <div class="row">
-          <h2 style="margin:0">修复结果</h2>
+          <h2 style="margin:0">{{ fix.mode === 'rebuild' ? '排版重建结果' : '规范修复结果' }}</h2>
           <span class="spacer"></span>
           <a class="btn" :href="api.downloadUrl(id, 'original')">下载原件</a>
           <a class="btn primary" :href="api.downloadUrl(id, 'fixed')">下载优化后的 EPUB</a>
@@ -105,9 +106,11 @@ onUnmounted(() => clearTimeout(timer))
                     :tone="fix.epubcheck.blocking ? 'error' : 'ok'" />
           <StatTile label="本工具发现的问题" :value="`${fix.before.total} → ${fix.after.total}`"
                     :sub="fix.after.total ? '剩余的需确认、大模型或人工处理' : ''" />
-          <StatTile label="正文文字" :value="fix.text.equal ? '一致' : '有差异'" :tone="fix.text.equal ? 'ok' : 'error'"
-                    :sub="fix.text.equal ? `共 ${fix.text.length} 字，未增删` : fix.text.summary" />
-          <StatTile label="修改" :value="fix.changes.length" :sub="`输出 ${kb(fix.size)}`" />
+          <StatTile label="正文文字" :value="fix.text.equal ? '完整' : '有差异'" :tone="fix.text.equal ? 'ok' : 'error'"
+                    :sub="fix.text.summary" />
+          <StatTile v-if="fix.rebuild" label="重建" :value="`${fix.rebuild.files} 个文件`"
+                    :sub="`注释 ${fix.rebuild.notes} 条 · 删除 ${fix.rebuild.removed_total} 块${fix.rebuild.vertical ? ' · 竖排' : ''}`" />
+          <StatTile v-else label="修改" :value="fix.changes.length" :sub="`输出 ${kb(fix.size)}`" />
         </div>
       </section>
 
@@ -116,6 +119,7 @@ onUnmounted(() => clearTimeout(timer))
           <button :class="{ active: tab === 'issues' }" @click="tab = 'issues'">
             问题清单（{{ fix ? fix.after.total : audit.issues.total }}）</button>
           <button :class="{ active: tab === 'epubcheck' }" @click="tab = 'epubcheck'">epubcheck</button>
+          <button v-if="fix?.rebuild" :class="{ active: tab === 'rebuild' }" @click="tab = 'rebuild'">重建详情</button>
           <button v-if="fix" :class="{ active: tab === 'changes' }" @click="tab = 'changes'">修改记录（{{ fix.changes.length }}）</button>
         </div>
         <div v-show="tab === 'issues'">
@@ -125,6 +129,22 @@ onUnmounted(() => clearTimeout(timer))
         <div v-show="tab === 'epubcheck'">
           <p class="muted small">{{ fix ? '修复后' : '修复前' }}的 EPUBCheck 官方校验结果。</p>
           <EpubcheckList :report="fix ? fix.epubcheck : audit.epubcheck" />
+        </div>
+        <div v-if="fix?.rebuild" v-show="tab === 'rebuild'">
+          <p class="muted small">程序识别出的内容类型，以及被删除的内容（书内目录页由导航取代，广告/引流内容、注释区小标题不再需要）。</p>
+          <div class="row" style="align-items:flex-start; gap:24px">
+            <table style="width:auto; min-width:240px">
+              <thead><tr><th>内容类型</th><th>数量</th></tr></thead>
+              <tbody><tr v-for="r in fix.rebuild.roles" :key="r.role"><td>{{ r.name }}</td><td class="mono">{{ r.count }}</td></tr></tbody>
+            </table>
+            <div style="flex:1; min-width:300px">
+              <h3 style="margin-top:0">删除的内容（{{ fix.rebuild.removed_total }}）</h3>
+              <table><tbody>
+                <tr v-for="(r, i) in fix.rebuild.removed" :key="i"><td style="width:90px"><span class="badge">{{ r.name }}</span></td><td class="small">{{ r.text || '（空）' }}</td></tr>
+              </tbody></table>
+              <p v-if="fix.rebuild.removed_total > fix.rebuild.removed.length" class="muted small">仅显示前 {{ fix.rebuild.removed.length }} 条</p>
+            </div>
+          </div>
         </div>
         <div v-if="fix" v-show="tab === 'changes'">
           <ChangeLog :changes="fix.changes" :rules="rules" />

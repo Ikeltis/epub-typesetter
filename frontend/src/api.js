@@ -17,7 +17,7 @@ export const api = {
     fd.append('file', file)
     return request('POST', '/api/books', fd)
   },
-  fix: (id) => request('POST', `/api/books/${id}/fix`),
+  fix: (id, mode = 'basic') => request('POST', `/api/books/${id}/fix?mode=${mode}`),
   remove: (id) => request('DELETE', `/api/books/${id}`),
   downloadUrl: (id, which = 'fixed') => `/api/books/${id}/download?which=${which}`,
 }

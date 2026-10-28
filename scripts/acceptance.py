@@ -11,7 +11,9 @@ from collections import Counter
 
 from epub_typesetter import engine, epubcheck, layoutcheck
 from epub_typesetter.book import Book
-from epub_typesetter.textcheck import compare_text
+from epub_typesetter.pipeline import optimize
+from epub_typesetter.rebuild import REMOVED_ROLES
+from epub_typesetter.textcheck import compare_blocks, compare_text
 
 
 def main():
@@ -19,6 +21,7 @@ def main():
     ap.add_argument('indir')
     ap.add_argument('-o', '--out', required=True)
     ap.add_argument('--only', default='')
+    ap.add_argument('--m2', action='store_true', help='跑完整优化（语义分析+重建），按块校验文字')
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     rows, after_ids = [], Counter()
@@ -29,12 +32,23 @@ def main():
         t0 = time.time()
         original = open(path, 'rb').read()
         book = Book.load(original)
-        rep = engine.fix(book)
-        out = book.to_bytes()
+        if a.m2:
+            orep = optimize(book)
+            rep = orep.refix
+            out = book.to_bytes()
+            bc = compare_blocks(orep.analysis.blocks, REMOVED_ROLES, Book.load(out))
+            diff = type('D', (), {'equal': bc.ok, 'summary': bc.summary})()
+            layout = None                          # 拆章后逐文件比版面不成立，靠按块校验 + 抽样截图
+            extra = dict(roles=dict(orep.analysis.counts()), files=len(orep.rebuild.chapters),
+                         removed=len(orep.rebuild.removed))
+        else:
+            rep = engine.fix(book)
+            out = book.to_bytes()
+            diff = compare_text(Book.load(original), Book.load(out))
+            layout = layoutcheck.compare_layout(original, out) if layoutcheck.available() else None
+            extra = {}
         open(os.path.join(a.out, name), 'wb').write(out)
         again = engine.fix(Book.load(out))
-        diff = compare_text(Book.load(original), Book.load(out))
-        layout = layoutcheck.compare_layout(original, out) if layoutcheck.available() else None
         before_msgs, after_msgs = epubcheck.run(path), epubcheck.run_bytes(out)
         for m in after_msgs or []:
             if m.severity in ('ERROR', 'FATAL'):
@@ -44,7 +58,7 @@ def main():
                    text_equal=diff.equal, text_diff='' if diff.equal else diff.summary()[:120],
                    layout_ok=None if layout is None else layout.ok,
                    layout='' if layout is None or layout.ok else layout.summary()[:160],
-                   secs=round(time.time() - t0, 1))
+                   secs=round(time.time() - t0, 1), **extra)
         if again.changes:
             row['again'] = [f'{r}:{l[:60]}' for r, l in again.changes[:3]]
         rows.append(row)

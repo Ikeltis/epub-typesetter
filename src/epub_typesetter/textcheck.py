@@ -74,3 +74,82 @@ def compare_text(before: Book, after: Book) -> TextDiff:
         if ta != tb:
             changes += _diff(pa, ta, tb)
     return TextDiff(False, total, changes)
+
+
+# ---------- 重建后的「按块」校验 ----------
+
+_NOTE_MARK = re.compile(r'\[\d{1,3}\]|\uff3b\d{1,3}\uff3d|[\u2460-\u2473]|〔\d{1,3}〕')   # [1]、［1］、①–⑳、〔1〕
+_BULLET = re.compile(r'^[●•◆◇■□▪▫○◎※►▶➢✓✔]')
+
+
+def _after_text(book: Book) -> str:
+    """重建后全书文字：跳过新生成的注号与回链（它们的编号会变）。"""
+    parts = []
+    for it in book.spine_items():
+        if it.path not in book.files or it.media_type != 'application/xhtml+xml':
+            continue
+        root = book.tree(it.path).getroot()
+
+        def walk(el):
+            cls = (el.get('class') or '').split() if isinstance(el.tag, str) else []
+            if 'noteref' in cls or 'backlink' in cls:
+                if el.tail:
+                    parts.append(el.tail)
+                return
+            if isinstance(el.tag, str) and el.text:
+                parts.append(el.text)
+            for ch in el:
+                walk(ch)
+            if el.tail:
+                parts.append(el.tail)
+        body = next((e for e in root.iter() if isinstance(e.tag, str) and e.tag.endswith('}body')), root)
+        walk(body)
+    # 与重建前的块文字用同一套归一化：没配上注释的注号会保留原样，两边都要去掉
+    return _NOTE_MARK.sub('', _INVISIBLE.sub('', ''.join(parts)))
+
+
+@dataclass
+class BlockCheck:
+    total: int
+    missing: list[tuple[str, str]]          # (角色, 文字)
+    removed: int
+    chars_before: int = 0                   # 应保留块的字数
+    chars_after: int = 0                    # 重建后全书字数
+
+    @property
+    def duplicated(self) -> bool:
+        # 重建只删不增：字数明显变多说明有内容被重复输出（逐块子串匹配查不出重复）
+        return self.chars_after > self.chars_before * 1.005 + 20
+
+    @property
+    def ok(self) -> bool:
+        return not self.missing and not self.duplicated
+
+    def summary(self) -> str:
+        if self.ok:
+            return f'{self.total} 个内容块全部保留（另有意删除 {self.removed} 块）'
+        parts = []
+        if self.missing:
+            parts.append(f'{len(self.missing)} 个内容块找不到：' +
+                         '；'.join(f'{r}「{t[:20]}」' for r, t in self.missing[:5]))
+        if self.duplicated:
+            parts.append(f'字数 {self.chars_before} → {self.chars_after}，疑似内容重复')
+        return '；'.join(parts)
+
+
+def compare_blocks(blocks, removed_roles: set[str], after: Book) -> BlockCheck:
+    """blocks：重建前的语义块；有意删除的角色不检查，其余每块的文字都必须出现在重建后的书里。"""
+    text = _after_text(after)
+    missing, total, removed, chars = [], 0, 0, 0
+    for b in blocks:
+        if b.role in removed_roles:
+            removed += 1
+            continue
+        t = _INVISIBLE.sub('', _NOTE_MARK.sub('', _BULLET.sub('', b.text.strip())))
+        if not t:
+            continue
+        total += 1
+        chars += len(t)
+        if t not in text:
+            missing.append((b.role, b.text))
+    return BlockCheck(total, missing, removed, chars, len(text))

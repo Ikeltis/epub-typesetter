@@ -112,21 +112,18 @@ aside.note-box p{ text-indent:0; }
 /* ===== 9. 分页保护 ===== */
 p.page-break, .page-break{ page-break-before:always; break-before:page; }   /* 极少用 */
 
-/* tpl:notes */
-a.noteref{ padding:.2em .15em; text-decoration:none; }          /* 扩大点击区，不依赖 sup 的 smaller */
-a.noteref sup{ font-size:.7em; line-height:0; }                 /* 与默认表 sup 一致，勿再给 a 加字号造成双重缩小 */
-section.footnotes{ margin-top:2em; }
-section.footnotes::before{ content:""; display:block; width:30%; margin-bottom:.6em; border-top:1px solid; }  /* 注线：版心宽 1/4–1/3 [书] */
-section.footnotes aside, section.endnotes li{ margin:.4em 0; font-size:.875em; line-height:1.5;
-  font-family:"Kaiti SC","STKaiti","KaiTi",serif; }              /* [书] 小两号：.85–.875em */
-section.footnotes aside p, section.endnotes li p{ margin:.2em 0; text-indent:0; text-align:justify; }
-a.backlink{ text-decoration:none; }
+/* tpl:notes —— 书末尾注，做法同 Standard Ebooks（guide/04 T16） */
+a.noteref{ font-size:.75em; line-height:0; vertical-align:super; font-style:normal; font-weight:normal;
+  text-decoration:none; padding:0 .1em; }                       /* 不用 <sup>：避免与 sup/small 叠加缩小 */
+section.endnotes > ol{ margin:1em 0; padding-left:2.5em; }
+section.endnotes > ol > li{ margin:1em 0; font-size:.9em; line-height:1.6; }
+section.endnotes li p{ margin:.3em 0; text-indent:0; text-align:justify; }
+a.backlink{ text-decoration:none; padding:0 .2em; }
 
 /* ===== 10. 本工具重建时用到的增量类（guide/04） ===== */
 p.source{ margin:.2em 0 1em; font-size:.85em; line-height:1.5; text-indent:0; text-align:left; }  /* 图表资料来源 */
 p.meta{ margin:.3em 0; text-indent:0; text-align:left; }                                     /* 版权页键值行 */
 ul.bullets{ list-style-type:disc; }
-section.footnotes aside p a.backlink{ margin-right:.3em; }
 img.glyph{ height:1em; width:auto; vertical-align:-.1em; margin:0 .05em; }  /* 行内图片字、生僻字、版本标记（guide/04 T20） */
 /* 原书有语义的颜色（批语、强调）映射为 accent；guide/03 默认不写死颜色，这是唯一例外，并给夜间模式配色 */
 .accent{ color:#a8382b; }

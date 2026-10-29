@@ -78,7 +78,8 @@ def test_rebuild_structure_and_text_kept():
     rep = optimize(b)
     out = Book.load(b.to_bytes())
     spine = [i.path for i in out.spine_items()]
-    assert spine == ['OEBPS/Text/cover.xhtml', 'OEBPS/Text/chapter01.xhtml', 'OEBPS/Text/chapter02.xhtml']
+    assert spine == ['OEBPS/Text/cover.xhtml', 'OEBPS/Text/chapter01.xhtml', 'OEBPS/Text/chapter02.xhtml',
+                     'OEBPS/Text/endnotes.xhtml']
     ch1 = out.tree('OEBPS/Text/chapter01.xhtml').getroot()
     assert ch1.find(f'.//{X}section').get(EPUB_T) == 'chapter'
     assert [h.text for h in ch1.iter(X + 'h1', X + 'h2')] == ['第1章 开始', '一节']
@@ -87,12 +88,19 @@ def test_rebuild_structure_and_text_kept():
     assert fig.find(f'{X}img').get('alt') == '图1—1 示意图' and fig.find(f'{X}img').get('width') is None
     assert ch1.find(f".//{X}p[@class='source']") is not None
     assert [li.text for li in ch1.iter(X + 'li')] == ['要点一。', '要点二。']
+    # 注释：同 Standard Ebooks，书末尾注文件 + 不包 sup 的注号 + 注文末尾 ↩ 回链
     ref = ch1.find(f".//{X}a[@class='noteref']")
-    assert ref.get(EPUB_T) == 'noteref' and ref.get('href') == '#note-1'
-    note = ch1.find(f".//{X}aside[@id='note-1']")
-    assert note.get(EPUB_T) == 'footnote'
-    assert ''.join(note.itertext()).strip().endswith('这是注释内容。')
-    assert note.find(f".//{X}a[@class='backlink']").get('href') == '#noteref-1'
+    assert ref.get(EPUB_T) == 'noteref' and ref.get('href') == 'endnotes.xhtml#note-1' and ref.text == '1'
+    assert ref.find(f'{X}sup') is None and ref.getparent().tag != X + 'small'
+    en = out.tree('OEBPS/Text/endnotes.xhtml').getroot()
+    assert en.find(f'.//{X}section').get(EPUB_T) == 'endnotes'
+    li = en.find(f".//{X}li[@id='note-1']")
+    assert ''.join(li.itertext()).strip().startswith('这是注释内容。')
+    back = li.find(f".//{X}a[@class='backlink']")
+    assert back.get('href') == 'chapter01.xhtml#noteref-1' and back.get(EPUB_T) == 'backlink' and back.text == '↩'
+    assert spine[-1] == 'OEBPS/Text/endnotes.xhtml'
+    # 注号前后不留源码换行造成的空格
+    assert '正文1。' in ''.join(ch1.find(f'.//{X}p').itertext()).replace('\n', '')
     assert ch1.find(f'.//{X}font') is None and not any(e.get('style') for e in ch1.iter() if isinstance(e.tag, str))
     # 广告页、目录页、「注释」小标题被删，其余内容一字不少
     assert {r for r, _ in rep.rebuild.removed} == {'toc', 'junk', 'note-head'}
@@ -100,7 +108,7 @@ def test_rebuild_structure_and_text_kept():
     # nav 由新标题生成
     nav = next(i for i in out.manifest() if 'nav' in i.properties)
     labels = [a.text for a in out.tree(nav.path).getroot().iter(X + 'a')]
-    assert labels[:3] == ['第1章 开始', '一节', '第2章 继续']
+    assert labels[:4] == ['第1章 开始', '一节', '第2章 继续', '注释']
     assert engine.fix(out).changes == []
 
 

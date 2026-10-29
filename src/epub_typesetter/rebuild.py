@@ -73,13 +73,57 @@ def _el(tag: str, attrib: dict | None = None, text: str | None = None) -> etree.
 _HAN_PUNCT = r'[\u3000-\u303f\u3400-\u9fff\uf900-\ufaff\uff00-\uffef]'   # 汉字与全角标点
 
 
+SOFT = '\ufdd0'     # 源码换行产生的空白（Unicode 非字符，真实文本不会出现；XML 允许），留待跨标签判断
+
+
 def _clean_ws(s: str) -> str:
-    """源码排版产生的换行：夹在汉字/全角标点之间的删掉，其余变一个空格。"""
+    """源码排版产生的换行：夹在汉字/全角标点之间的直接删；其余先标成 SOFT，
+    等整块拼好后再看它跨标签的左右邻字决定删还是变一个空格。"""
     if not s:
         return s
     s = s.replace('\r', '\n')
     s = re.sub(rf'(?<={_HAN_PUNCT})[ \t]*\n\s*(?={_HAN_PUNCT})', '', s)
-    return re.sub(r'[ \t]*\n[\s]*', ' ', s)
+    return re.sub(r'[ \t]*\n[\s]*', SOFT, s)
+
+
+def _resolve_soft(dst: etree._Element) -> None:
+    """SOFT 两侧（跨标签看）有汉字或全角标点就删掉，两侧都是西文才变一个空格。"""
+    order = []
+
+    def walk(el):
+        order.append((el, 'text'))
+        for ch in el:
+            if isinstance(ch.tag, str):
+                walk(ch)
+            order.append((ch, 'tail'))
+    walk(dst)
+    texts = [getattr(e, a) or '' for e, a in order]
+    full = ''.join(texts)
+    if SOFT not in full:
+        return
+    han = re.compile(_HAN_PUNCT)
+    res: list[str] = []
+    for i, c in enumerate(full):
+        if c != SOFT:
+            res.append(c)
+            continue
+        j = i - 1
+        while j >= 0 and full[j] in (SOFT, ' '):
+            j -= 1
+        k = i + 1
+        while k < len(full) and full[k] in (SOFT, ' '):
+            k += 1
+        prev_c = full[j] if j >= 0 else ''
+        next_c = full[k] if k < len(full) else ''
+        drop = (not prev_c or not next_c or han.match(prev_c) or han.match(next_c)
+                or (res and res[-1] == ' ') or (k < len(full) and full[i + 1:k].strip(SOFT)))
+        res.append('' if drop else ' ')
+    pos = 0
+    for (e, a), t in zip(order, texts):
+        new = ''.join(res[pos:pos + len(t)])
+        pos += len(t)
+        if new != t:
+            setattr(e, a, new or None)
 
 
 class Rebuilder:
@@ -99,8 +143,9 @@ class Rebuilder:
         self.heading_no = 0
         self.classes = class_styles(book)                # 原样式表的类样式：用于把语义性的行内样式映射到主题类
         self.img_height: dict[str, int | None] = {}
-        self.note_home: dict[int, str] = {}              # 注块序号 → 注文所在新文档
-        self.notes_for: dict[str, list] = {}             # 新文档 → [(注序号, 注块)]
+        # 注释采用 Standard Ebooks 的做法：全书一个书末尾注文件，正文注号链接过去，注文末尾 ↩ 回链
+        self.endnotes_path = posixpath.join(self.out_dir, 'endnotes.xhtml') if self.out_dir else 'endnotes.xhtml'
+        self.endnotes: list[tuple[int, Block, str]] = []  # (注序号, 注块, 首次引用所在新文档)
         self.frag_map: dict[tuple[str, str], str] = {}   # (旧文档, id) → 新 id（id 被替换时）
         self.removed_docs: set[str] = set()
 
@@ -167,11 +212,10 @@ class Rebuilder:
                     num = self.note_of_block[note_idx]
                     self.noteref_els[id(a)] = (num, ch.path)
                     note_block = self.an.blocks[note_idx]
-                    if note_idx not in self.note_home:          # 注文放在首次引用它的那一章末尾
-                        self.note_home[note_idx] = ch.path
-                        self.notes_for.setdefault(ch.path, []).append((num, note_block))
+                    if len(self.endnotes) < num:                 # 首次引用：登记到书末尾注
+                        self.endnotes.append((num, note_block, ch.path))
                         for anc in note_block.anchors:
-                            self.id_map[(note_block.doc, anc)] = ch.path
+                            self.id_map[(note_block.doc, anc)] = self.endnotes_path
                             self.frag_map[(note_block.doc, anc)] = f'note-{num}'
         self.rep.notes = n
 
@@ -273,14 +317,22 @@ class Rebuilder:
                 num, _ = self.noteref_els[id(ch)]
                 if ch.get('id'):                       # 原注号上的 id 可能是注文回链的目标，保留
                     d.append(_el('span', {'id': ch.get('id')}))
+                # 不包 <sup>：上标效果由 CSS（a.noteref）实现，避免与 sup/small 叠加缩小（同 Standard Ebooks）
                 a = _el('a', {'class': 'noteref', EPUB + 'type': 'noteref', 'role': 'doc-noteref',
-                              'href': f'#note-{num}', 'id': f'noteref-{num}'})
-                sup = etree.SubElement(a, X + 'sup')
-                sup.text = str(num)
+                              'href': f'{Book.relative(self.cur_new, self.endnotes_path)}#note-{num}',
+                              'id': f'noteref-{num}'}, str(num))
                 d.append(a)
                 return
-            if ch.tag == X + 'sup' and self._wraps_noteref(ch):
-                walk(ch, d)                    # 原来的 <sup><small><a>[1]</a></small></sup>：外壳去掉
+            if self._only_noteref(ch):
+                # <sup><small><a>[1]</a></small></sup> 这类外壳里只有注号：整个外壳去掉，只留注号（和其中的锚点 id），
+                # 否则注号会被 small 和 sup 双重缩小
+                for x in ch.iterdescendants():
+                    if not isinstance(x.tag, str):
+                        continue
+                    if id(x) in self.noteref_els:
+                        convert(x, d)
+                    elif x.get('id') and not any(id(p) in self.noteref_els for p in x.iterancestors()):
+                        d.append(_el('span', {'id': x.get('id')}))
                 return
             if ch.get('id') and not (tag in KEEP_INLINE and tag != 'span'):
                 d.append(_el('span', {'id': ch.get('id')}))
@@ -333,6 +385,7 @@ class Rebuilder:
             walk(ch, e)
 
         walk(src, dst)
+        _resolve_soft(dst)
         # 块首尾空白
         if dst.text:
             dst.text = dst.text.lstrip()
@@ -342,8 +395,17 @@ class Rebuilder:
         elif last is None and dst.text:
             dst.text = dst.text.rstrip()
 
-    def _wraps_noteref(self, el) -> bool:
-        return any(id(a) in self.noteref_els for a in el.iter(X + 'a'))
+    def _only_noteref(self, el) -> bool:
+        """el 不是注号本身，但里面有注号，且除注号文字外没有别的文字。"""
+        if id(el) in self.noteref_els:
+            return False
+        refs = [a for a in el.iter(X + 'a') if id(a) in self.noteref_els]
+        if not refs:
+            return False
+        rest = ''.join(el.itertext())
+        for a in refs:
+            rest = rest.replace(''.join(a.itertext()), '', 1)
+        return not rest.strip()
 
     # ---------- 5. 块 ----------
 
@@ -455,35 +517,50 @@ class Rebuilder:
             self._anchors(b, e)
             sec.append(e)
             i += 1
-        notes_here = self.notes_for.get(ch.path, [])
-        if notes_here:
-            fn = etree.SubElement(sec, X + 'section', {'class': 'footnotes', EPUB + 'type': 'footnotes'})
-            for num, b in sorted(notes_here):
-                self.cur_doc = b.doc
-                aside = etree.SubElement(fn, X + 'aside', {'id': f'note-{num}', EPUB + 'type': 'footnote',
-                                                         'role': 'doc-footnote'})
-                p = etree.SubElement(aside, X + 'p')
-                back = etree.SubElement(p, X + 'a', {'class': 'backlink', 'role': 'doc-backlink',
-                                                     'href': f'#noteref-{num}'})
-                back.text = str(num)
-                body_src = copy.deepcopy(b.el)
-                for a in list(body_src.iter(X + 'a')):         # 去掉原来的「[n]」回链
-                    if NOTE_LABEL_RE.fullmatch(re.sub(r'\s+', '', ''.join(a.itertext())) or 'x'):
-                        tail = a.tail
-                        parent = a.getparent()
-                        prev = a.getprevious()
-                        parent.remove(a)
-                        if tail:
-                            if prev is not None:
-                                prev.tail = (prev.tail or '') + tail
-                            else:
-                                parent.text = (parent.text or '') + tail
-                        break
-                holder = _el('span')
-                self.inline(body_src, holder, NOTE_LABEL_RE, sized=True)
-                back.tail = '\u3000' + (holder.text or '')
-                for c in holder:
-                    p.append(c)
+        return html
+
+    def render_endnotes(self) -> etree._Element:
+        """书末尾注：<section epub:type="endnotes"><ol><li id="note-n"><p>注文 <a epub:type="backlink">↩</a></p></li></ol>。"""
+        self.cur_new = self.endnotes_path
+        html = etree.Element(X + 'html', nsmap={None: NS['xhtml'], 'epub': NS['epub']})
+        html.set('lang', self.lang)
+        html.set(XML_LANG, self.lang)
+        head = etree.SubElement(html, X + 'head')
+        etree.SubElement(head, X + 'meta', {'charset': 'utf-8'})
+        etree.SubElement(head, X + 'title').text = '注释'
+        etree.SubElement(head, X + 'link', {'rel': 'stylesheet', 'type': 'text/css',
+                                            'href': Book.relative(self.endnotes_path, self.css_path)})
+        body = etree.SubElement(html, X + 'body', {EPUB + 'type': 'backmatter'})
+        sec = etree.SubElement(body, X + 'section', {'id': 'endnotes', 'class': 'endnotes',
+                                                     EPUB + 'type': 'endnotes', 'role': 'doc-endnotes'})
+        etree.SubElement(sec, X + 'h1', {'id': 'endnotes-title'}).text = '注释'
+        ol = etree.SubElement(sec, X + 'ol')
+        for num, b, ref_path in self.endnotes:
+            self.cur_doc = b.doc
+            li = etree.SubElement(ol, X + 'li', {'id': f'note-{num}'})
+            p = etree.SubElement(li, X + 'p')
+            body_src = copy.deepcopy(b.el)
+            for a in list(body_src.iter(X + 'a')):         # 去掉原来的「[n]」回链（编号由 ol 自动生成）
+                if NOTE_LABEL_RE.fullmatch(re.sub(r'\s+', '', ''.join(a.itertext())) or 'x'):
+                    tail = a.tail
+                    parent = a.getparent()
+                    prev = a.getprevious()
+                    parent.remove(a)
+                    if tail:
+                        if prev is not None:
+                            prev.tail = (prev.tail or '') + tail
+                        else:
+                            parent.text = (parent.text or '') + tail
+                    break
+            self.inline(body_src, p, NOTE_LABEL_RE, sized=True)
+            back = _el('a', {'class': 'backlink', EPUB + 'type': 'backlink', 'role': 'doc-backlink',
+                             'aria-label': '返回正文',
+                             'href': f'{Book.relative(self.endnotes_path, ref_path)}#noteref-{num}'}, '↩')
+            if len(p):
+                p[-1].tail = (p[-1].tail or '') + ' '
+            else:
+                p.text = (p.text or '') + ' '
+            p.append(back)
         return html
 
     def _book_title(self) -> str:
@@ -498,6 +575,9 @@ class Rebuilder:
         self.number_notes(chapters)
         old_docs = {b.doc for b in self.an.blocks}
         trees = [(ch, self.render_chapter(ch)) for ch in chapters]
+        if self.endnotes:
+            notes_ch = Chapter('注释', path=self.endnotes_path, epub_type='endnotes', role=None)
+            trees.append((notes_ch, self.render_endnotes()))
 
         # 删除旧正文文件、旧样式表
         old_css = [i for i in book.manifest() if i.media_type == 'text/css']
@@ -569,6 +649,8 @@ class Rebuilder:
         body_ch = next((c for c in chapters if c.epub_type == 'chapter'), chapters[0] if chapters else None)
         if body_ch is not None:
             landmarks.append(('bodymatter', '正文', body_ch.path))
+        if any(c.epub_type == 'endnotes' for c in chapters):
+            landmarks.append(('endnotes', '注释', self.endnotes_path))
         nav_item = next((i for i in book.manifest() if 'nav' in i.properties), None)
         nav_path = nav_item.path if nav_item else posixpath.join(self.out_dir, 'nav.xhtml')
         data = build_nav(book, nav_path, entries, landmarks, self.lang)

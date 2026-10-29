@@ -132,6 +132,7 @@ class Book:
         self.zip_notes: list[str] = []
         self._trees: dict[str, etree._ElementTree] = {}
         self._dirty: set[str] = set()
+        self.origins: dict[str, set[str]] = {}    # 当前路径 → 输入书里的原路径（改名、拆分后用于匹配豁免）
         self.opf_path = self._find_opf()
 
     # ---------- 读取 ----------
@@ -213,6 +214,10 @@ class Book:
                 raise KeyError(path)
             self._trees[path] = parse_xml(self.files[path], path, self.parse_notes)
         return self._trees[path]
+
+    def history(self, path: str) -> set[str]:
+        """该文件的当前路径及其全部原路径。"""
+        return {path} | self.origins.get(path, set())
 
     def mark_dirty(self, path: str) -> None:
         self._dirty.add(path)

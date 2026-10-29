@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { api, BUSY } from '../api.js'
 import StatusBadge from '../components/StatusBadge.vue'
 import StatTile from '../components/StatTile.vue'
-import IssueGroups from '../components/IssueGroups.vue'
+import IssueReport from '../components/IssueReport.vue'
 import EpubcheckList from '../components/EpubcheckList.vue'
 import ChangeLog from '../components/ChangeLog.vue'
 
@@ -18,7 +18,7 @@ const meta = computed(() => data.value?.meta)
 const audit = computed(() => data.value?.audit)
 const fix = computed(() => data.value?.fix)
 const busy = computed(() => meta.value && BUSY.has(meta.value.status))
-const autoCount = computed(() => (audit.value?.issues.items || []).filter((i) => i.fix_level === 'auto').length)
+const autoCount = computed(() => audit.value?.issues.summary?.auto_fixable ?? 0)
 
 async function load() {
   try {
@@ -43,7 +43,7 @@ async function remove() {
   location.hash = '#/'
 }
 
-const sevCount = (rep, s) => rep?.by_severity?.[s] || 0
+const sevCount = (rep, s) => rep?.summary?.[s] || 0
 const kb = (n) => n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.ceil(n / 1024)} KB`
 
 onMounted(async () => {
@@ -123,8 +123,9 @@ onUnmounted(() => clearTimeout(timer))
           <button v-if="fix" :class="{ active: tab === 'changes' }" @click="tab = 'changes'">修改记录（{{ fix.changes.length }}）</button>
         </div>
         <div v-show="tab === 'issues'">
-          <p class="muted small">{{ fix ? '修复后仍存在的问题' : '修复前的问题' }}，点开可看每个文件的明细。</p>
-          <IssueGroups :items="(fix ? fix.after : audit.issues).items" :rules="rules" />
+          <p class="muted small">{{ fix ? '修复后仍存在的问题' : '修复前的问题' }}，按文件分组。有意保留的写法可以「忽略」（须写理由），之后修复会跳过它。</p>
+          <p v-if="fix?.waivers_changed" class="notice">豁免已更改。下载的文件仍是按旧豁免修复的，重新点「仅规范修复」或「排版重建」后才生效。</p>
+          <IssueReport :report="fix ? fix.after : audit.issues" :pid="id" :busy="busy" @changed="load" />
         </div>
         <div v-show="tab === 'epubcheck'">
           <p class="muted small">{{ fix ? '修复后' : '修复前' }}的 EPUBCheck 官方校验结果。</p>

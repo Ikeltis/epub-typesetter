@@ -11,8 +11,10 @@ from urllib.parse import quote
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from .. import __version__, engine, epubcheck
+from ..waivers import WaiverFileError, WaiverSet
 from . import jobs, store
 
 MAX_UPLOAD = int(os.environ.get('EPUBTS_MAX_UPLOAD_MB', '300')) * 1024 * 1024
@@ -36,8 +38,13 @@ def health():
 
 @app.get('/api/rules')
 def rules():
-    return [{'id': r.id, 'title': r.title, 'category': r.id.split('-')[0],
-             'category_name': CATEGORIES.get(r.id.split('-')[0], '')} for r in engine.all_rules()]
+    """全部规范规则（含尚未实现检测的），供界面显示标题、提示和规范条目。"""
+    implemented = {r.id for r in engine.all_rules()}
+    return [{'id': rid, 'title': m['title'], 'description': m['description'], 'hint': m['hint'],
+             'spec': m['spec'], 'severity': m['severity'], 'fix_level': m['fix_level'],
+             'priority': m['priority'], 'implemented': rid in implemented,
+             'category': rid.split('-')[0], 'category_name': CATEGORIES.get(rid.split('-')[0], '')}
+            for rid, m in engine.rules_meta()['rules'].items()]
 
 
 @app.get('/api/books')
@@ -62,6 +69,9 @@ async def upload(file: UploadFile):
 @app.get('/api/books/{pid}')
 def get_book(pid: str):
     meta = _meta_or_404(pid)
+    audit = store.read_json(pid, 'audit.json')
+    if audit and 'summary' not in audit['issues'] and meta.status not in jobs.BUSY:
+        jobs.rescore(pid)                  # 旧版报告格式：按 guide/07 §6 重算一次
     return {'meta': asdict(meta), 'audit': store.read_json(pid, 'audit.json'),
             'fix': store.read_json(pid, 'fix.json')}
 
@@ -71,11 +81,65 @@ def run_fix(pid: str, mode: str = 'basic'):
     meta = _meta_or_404(pid)
     if mode not in ('basic', 'rebuild'):
         raise HTTPException(400, 'mode 只能是 basic 或 rebuild')
-    if meta.status in ('queued', 'auditing', 'fixing'):
+    if meta.status in jobs.BUSY:
         raise HTTPException(409, '这本书正在处理中')
     store.update(pid, status='fixing')
     jobs.submit(jobs.fix, pid, mode)
     return {'ok': True}
+
+
+class WaiverIn(BaseModel):
+    rule: str
+    reason: str
+    file: str | None = None
+    where: dict | None = None
+
+
+def _idle_or_409(pid: str) -> store.Meta:
+    meta = _meta_or_404(pid)
+    if meta.status in jobs.BUSY:
+        raise HTTPException(409, '这本书正在处理中')
+    return meta
+
+
+def _load_waivers_or_409(pid: str) -> WaiverSet:
+    try:
+        return WaiverSet.load(store.path(pid, 'waivers.json'))
+    except WaiverFileError as e:
+        raise HTTPException(409, f'豁免文件格式有误，请先修正：{e}') from None
+
+
+@app.get('/api/books/{pid}/waivers')
+def get_waivers(pid: str):
+    _meta_or_404(pid)
+    ws = jobs.load_waivers(pid)
+    return {**ws.to_dict(), 'problems': [{'severity': s, 'message': m} for s, m, _ in ws.problems]}
+
+
+@app.post('/api/books/{pid}/waivers', status_code=201)
+def add_waiver(pid: str, body: WaiverIn):
+    """新增一条豁免（理由必填），随即重算问题报告。"""
+    _idle_or_409(pid)
+    if not body.reason.strip():
+        raise HTTPException(400, '请填写豁免理由')
+    ws = _load_waivers_or_409(pid)
+    try:
+        w = ws.add(body.rule, body.reason, body.file, body.where)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    ws.save(store.path(pid, 'waivers.json'))
+    jobs.rescore(pid)
+    return w.to_json()
+
+
+@app.delete('/api/books/{pid}/waivers/{wid}', status_code=204)
+def delete_waiver(pid: str, wid: str):
+    _idle_or_409(pid)
+    ws = _load_waivers_or_409(pid)
+    if not ws.remove(wid):
+        raise HTTPException(404, '找不到这条豁免')
+    ws.save(store.path(pid, 'waivers.json'))
+    jobs.rescore(pid)
 
 
 @app.get('/api/books/{pid}/download')

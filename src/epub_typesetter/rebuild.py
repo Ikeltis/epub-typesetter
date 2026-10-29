@@ -673,6 +673,12 @@ class Rebuilder:
         if self.endnotes:
             notes_ch = Chapter('注释', path=self.endnotes_path, epub_type='endnotes', role=None)
             trees.append((notes_ch, self.render_endnotes()))
+        # 新文件继承来源文件的历史路径（guide/07 §7.4：拆分继承、合并取并集）
+        hist = {d: book.history(d) for d in old_docs}
+        for ch in chapters:
+            book.origins[ch.path] = set().union(*(hist[b.doc] for b in ch.blocks)) - {ch.path}
+        if self.endnotes:
+            book.origins[self.endnotes_path] = set().union(*(hist[b.doc] for _, b, _ in self.endnotes))
 
         # 删除旧正文文件、旧样式表
         old_css = [i for i in book.manifest() if i.media_type == 'text/css']

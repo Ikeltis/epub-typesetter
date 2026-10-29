@@ -28,6 +28,7 @@ def _caption_for(img):
 @register
 class ImageAlt(Rule):
     id, title, order = 'A11Y-001', '图片 alt', 90
+    node_fix = True
 
     def check(self, book):
         out = []
@@ -36,17 +37,20 @@ class ImageAlt(Rule):
             missing = [i for i in imgs if i.get('alt') is None]
             badname = [i for i in imgs if i.get('alt') and FILENAME_ALT.search(i.get('alt').strip())]
             if missing:
-                out.append(self.issue(ERROR, f'{len(missing)} 张图片没有 alt 属性', path, AUTO))
+                out.append(self.issue(ERROR, f'{len(missing)} 张图片没有 alt 属性', path, AUTO,
+                                      hits=[self.hit(i, fix={'op': 'set_attr', 'name': 'alt'}) for i in missing]))
             if badname:
-                out.append(self.issue(WARNING, f'{len(badname)} 张图片的 alt 是文件名/无意义词', path, LLM))
+                out.append(self.issue(WARNING, f'{len(badname)} 张图片的 alt 是文件名/无意义词', path, LLM,
+                                      hits=[self.hit(i) for i in badname]))
         return out
 
     def fix(self, book, issues):
         log = []
         for i in issues:
             cap = empty = 0
+            keep = i.waived_nodes()
             for img in body(book.tree(i.file).getroot()).iter(X + 'img'):
-                if img.get('alt') is None:
+                if img.get('alt') is None and img not in keep:
                     c = _caption_for(img)
                     img.set('alt', c)
                     cap += bool(c)

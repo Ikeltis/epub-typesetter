@@ -1,0 +1,2004 @@
+{
+ "spec_version": "2.0.0",
+ "rules": {
+  "STR-001": {
+   "priority": "P0",
+   "title": "mimetype 须为 ZIP 首个条目，内容恰为 application/ep",
+   "description": "`mimetype` 须为 ZIP 首个条目，内容恰为 `application/epub+zip`（无 BOM/换行），Stored 不压缩，无 extra field",
+   "severity": "error",
+   "fix_level": "auto",
+   "spec": [
+    "01 §2.1"
+   ],
+   "hint": "重打包：把 mimetype 放在 ZIP 第一条，Stored 不压缩，无 extra field，内容恰为 application/epub+zip。"
+  },
+  "STR-002": {
+   "priority": "P0",
+   "title": "ZIP 健全",
+   "description": "ZIP 健全：无加密条目、不分卷、条目名 UTF-8、无重复条目名、无大小写冲突名、无 `../` 或绝对路径、无 `.DS_Store`/`__MACOSX`/`Thumbs.db`",
+   "severity": "error（重复名/越界路径）；warning（垃圾文件）",
+   "fix_level": "auto",
+   "spec": [
+    "01 §2.2"
+   ],
+   "hint": "删除 __MACOSX、.DS_Store、Thumbs.db；重复名与越界路径先人工确认再处理。"
+  },
+  "STR-003": {
+   "priority": "P0",
+   "title": "META-INF/container.xml 存在，命名空间 urn:oasis",
+   "description": "`META-INF/container.xml` 存在，命名空间 `urn:oasis:names:tc:opendocument:xmlns:container`，至少一个 `rootfile`，`media-type=\"application/oebps-package+xml\"`，`full-path` 指向存在的 OPF",
+   "severity": "error",
+   "fix_level": "auto",
+   "spec": [
+    "01 §2.4"
+   ],
+   "hint": "让 container.xml 的 rootfile full-path 指向真实存在的 OPF；缺失时扫描包内 *.opf 重建。"
+  },
+  "STR-004": {
+   "priority": "P0",
+   "title": "OPF 必需项",
+   "description": "OPF 必需项：`package@version=\"3.0\"`（3.3 沿用此值）、`@unique-identifier` 指向存在的 `dc:identifier@id`、`dc:identifier`/`dc:title`/`dc:language` 各至少一个、恰一个 `meta property=\"dcterms:modified\"`（格式 `YYYY-MM-DDThh:mm:ssZ`）",
+   "severity": "error",
+   "fix_level": "auto/suggest",
+   "spec": [
+    "01 §4.1"
+   ],
+   "hint": "补全 OPF 必需元数据：identifier、title、language 与 dcterms:modified；缺 title 或 language 请用户填写。"
+  },
+  "STR-005": {
+   "priority": "P0",
+   "title": "manifest 与包内文件一致",
+   "description": "manifest 与包内文件一致：`item@id` 唯一；`href` 解码 `%xx` 后文件存在；href 不含绝对路径、盘符、`file:`、越出根目录的 `..`；包内文件（除 `mimetype`、`META-INF/*`、OPF 本身）均已登记",
+   "severity": "error（缺文件/重 id/越界）；warning（孤儿文件）",
+   "fix_level": "auto/suggest",
+   "spec": [
+    "01 §5.1",
+    "01 §9"
+   ],
+   "hint": "把被引用却未登记的文件补进 manifest；孤儿文件默认只提示；缺失的文件请补回或删掉引用。"
+  },
+  "STR-006": {
+   "priority": "P0",
+   "title": "item@media-type 与真实内容一致（魔数）且与扩展名一致",
+   "description": "`item@media-type` 与真实内容一致（魔数）且与扩展名一致",
+   "severity": "error",
+   "fix_level": "auto",
+   "spec": [
+    "01 §5.3"
+   ],
+   "hint": "按文件真实内容（魔数）改 manifest 的 media-type；扩展名不符时重命名并更新所有引用。"
+  },
+  "STR-007": {
+   "priority": "P0",
+   "title": "spine 完整",
+   "description": "spine 完整：每个 `itemref@idref` 存在；无重复 idref；所有 `application/xhtml+xml`/SVG 内容文档都在 spine（nav 文档可不在或 `linear=\"no\"`）；中文竖排书写模式时 `spine@page-progression-direction` 正确",
+   "severity": "error（idref 悬空、空 spine）；warning（漏项、重复）",
+   "fix_level": "auto/suggest",
+   "spec": [
+    "01 §5.4"
+   ],
+   "hint": "补入漏项，去掉重复和悬空的 itemref；正文不要设 linear=no。"
+  },
+  "STR-008": {
+   "priority": "P0",
+   "title": "恰有一个 properties 含 nav 的 manifest 项，指向 XH",
+   "description": "恰有一个 `properties` 含 `nav` 的 manifest 项，指向 XHTML，含 `nav[@epub:type='toc']`，其内为 `ol>li>(a|span)` 的有序嵌套结构，链接文字非空",
+   "severity": "error",
+   "fix_level": "auto",
+   "spec": [
+    "01 §6.1"
+   ],
+   "hint": "保证恰有一个 nav 文档且含 toc；缺失时按标题序列生成。"
+  },
+  "STR-009": {
+   "priority": "P1",
+   "title": "manifest properties 与内容一致",
+   "description": "manifest `properties` 与内容一致：含 `<script>`→`scripted`；含 `<svg>`→`svg`；含 MathML→`mathml`；引用 `http(s)://` 资源→`remote-resources`；封面→`cover-image`；`switch`/`epub:switch` 已废弃勿用",
+   "severity": "error",
+   "fix_level": "auto",
+   "spec": [
+    "01 §5.2"
+   ],
+   "hint": "按内容重新计算 manifest 的 properties（scripted、svg、mathml、remote-resources、cover-image）。"
+  },
+  "STR-010": {
+   "priority": "P0",
+   "title": "目录有效且完整",
+   "description": "目录有效且完整：nav 每个 `a@href` 的文件与片段都存在；条目顺序与 spine/文档顺序一致；正文中每个 h1/h2（及配置的层级）都有目录项；无两个条目指向同一位置；目录文字与目标标题文字一致（规范化空白后）；nav 文字以标题开头并带首句括注的不算不一致（04 4.3.7.4），副标题不进目录（04 4.3.3.6）",
+   "severity": "error（链接失效）；warning（漏项/文字不一致/顺序不一致/重复）",
+   "fix_level": "auto",
+   "spec": [
+    "01 §6.2",
+    "04 4.3.2.8",
+    "04 4.4.1",
+    "04 4.1.5.9"
+   ],
+   "hint": "重建目录：按标题序列生成 nav，条目文字取标题纯文本，链接指向所属 section 的 id。"
+  },
+  "STR-011": {
+   "priority": "P1",
+   "title": "目录层级不超过 nav.max_depth（默认 3）",
+   "description": "目录层级不超过 `nav.max_depth`（默认 3）；层级与标题层级相符，不出现空层",
+   "severity": "warning",
+   "fix_level": "suggest",
+   "spec": [
+    "01 §6.2"
+   ],
+   "hint": "把超过 nav.max_depth 的层级并入上一级。"
+  },
+  "STR-012": {
+   "priority": "P1",
+   "title": "nav[@epub:type='landmarks'] 含 cover（有封面时",
+   "description": "`nav[@epub:type='landmarks']` 含 `cover`（有封面时）、`bodymatter`（正文起点）、`toc`；条目指向存在的位置",
+   "severity": "warning",
+   "fix_level": "auto",
+   "spec": [
+    "01 §6.3",
+    "04 4.11.4.10",
+    "04 4.12.2.1"
+   ],
+   "hint": "补全 landmarks：cover、bodymatter、toc；有插图目录加 loi，有尾注文件加 endnotes。"
+  },
+  "STR-013": {
+   "priority": "P1",
+   "title": "文件与资源命名安全",
+   "description": "文件与资源命名安全：全包路径仅含 `[A-Za-z0-9._~-]` 与 `/`，不以 `-`、`.` 开头，无空格、中文、特殊符号，扩展名小写；单级文件名 ≤ 64 字符（本规则对 EPUB 3.3 不是硬性要求，目的是跨系统稳定）【补】",
+   "severity": "warning",
+   "fix_level": "auto",
+   "spec": [
+    "01 §2.3"
+   ],
+   "hint": "把文件名改成只含 ASCII 字母数字和 ._~- 的形式，并同步更新所有引用。"
+  },
+  "STR-014": {
+   "priority": "P1",
+   "title": "内容文档体积不超过 doc.max_bytes",
+   "description": "内容文档体积不超过 `doc.max_bytes`；一级标题（篇/章）宜独占一个文档",
+   "severity": "warning",
+   "fix_level": "auto/suggest",
+   "spec": [
+    "02 §2.2",
+    "04 4.2.4.3",
+    "04 4.2.4.4"
+   ],
+   "hint": "按最浅可用标题层级拆分文件；新文件顶层 section 写 data-parent，被拆出的 section id 保持不变。"
+  },
+  "STR-015": {
+   "priority": "P1",
+   "title": "若保留 NCX（为兼容旧阅读器）",
+   "description": "若保留 NCX（为兼容旧阅读器）：`dtb:uid` 等于 OPF 标识符；`navPoint` 的 `src` 有效；与 nav 顺序一致；`spine@toc` 指向 NCX；EPUB 3 不强制 NCX",
+   "severity": "warning",
+   "fix_level": "auto",
+   "spec": [
+    "01 §8.1"
+   ],
+   "hint": "由 nav 重新生成 NCX，或按配置删除 NCX。"
+  },
+  "STR-016": {
+   "priority": "P1",
+   "title": "前后部分顺序合理",
+   "description": "前后部分顺序合理：封面、版权、目录、序、正文、附录、后记、参考文献、索引的 spine 次序不颠倒",
+   "severity": "warning",
+   "fix_level": "llm/suggest",
+   "spec": [
+    "02 §3"
+   ],
+   "hint": "按常规顺序（封面、版权、目录、序、正文、附录、后记、参考文献、索引）调整 spine，须用户确认。"
+  },
+  "STR-017": {
+   "priority": "P1",
+   "title": "文件按角色命名",
+   "description": "文件按角色命名：封面 `cover`、版权 `copyright`/`colophon`、序 `foreword`、章 `chapter-NN`、附录 `appendix`…（命名在包内稳定，便于维护）",
+   "severity": "info",
+   "fix_level": "suggest",
+   "spec": [
+    "01 §2.3"
+   ],
+   "hint": "按角色重命名文件（cover、copyright、foreword、chapter-NN…），同时更新引用。"
+  },
+  "STR-018": {
+   "priority": "P1",
+   "title": "元数据质量",
+   "description": "元数据质量：`dc:language` 为合法 BCP 47（`zh`、`zh-CN`、`zh-Hans`、`en` 等）且与正文 `xml:lang` 一致；`dc:title` 不是文件名/“未命名”；`dc:creator` 存在；`dc:date`/`dcterms:modified` 格式合法；`dc:identifier` 非复用的默认值；ISBN 通过校验（见下）",
+   "severity": "warning",
+   "fix_level": "suggest",
+   "spec": [
+    "01 §4.1",
+    "01 §4.2"
+   ],
+   "hint": "修正语言码；补齐缺失的书名、作者；ISBN 去连字符并核对校验位。"
+  },
+  "STR-019": {
+   "priority": "P2",
+   "title": "版权页/封面/OPF 书名、作者一致",
+   "description": "版权页/封面/OPF 书名、作者一致",
+   "severity": "info",
+   "fix_level": "llm",
+   "spec": [
+    "04 4.14.3.3"
+   ],
+   "hint": "三处不一致时只列出差异，由用户决定以哪处为准。"
+  },
+  "STR-020": {
+   "priority": "P2",
+   "title": "阅读体验元数据",
+   "description": "阅读体验元数据：竖排书设 `spine@page-progression-direction=\"rtl\"`；若使用固定布局则要求 `rendition:*`（本规范以流式为主，固定布局不在范围）【补】；`writing-mode`、`page-progression-direction`、语言三者须一致（04 4.15.1.2），不一致只报告",
+   "severity": "info",
+   "fix_level": "suggest",
+   "spec": [
+    "01 §5.5",
+    "04 4.15.1.1",
+    "04 4.15.1.2"
+   ],
+   "hint": "竖排书给 spine 加 page-progression-direction=rtl；三者不一致时先确认再改。"
+  },
+  "STR-021": {
+   "priority": "P1",
+   "title": "无内容的文件与元数据",
+   "description": "无内容的文件与元数据：零字节或仅空白的包内文件（含内容文档）；OPF `metadata` 中无内容的 `dc:*`/`meta` 元素",
+   "severity": "warning",
+   "fix_level": "auto",
+   "spec": [
+    "01 §3",
+    "01 §4"
+   ],
+   "hint": "删除这个空文件及其 manifest、spine 登记；空的元数据元素直接删掉。"
+  },
+  "STR-022": {
+   "priority": "P1",
+   "title": "meta@refines 必须指向存在的元素 id（写成 #id）",
+   "description": "`meta@refines` 必须指向存在的元素 id（写成 `#id`）；`dc:creator`/`dc:contributor` 应带 `role`（`aut`、`trl`、`edt`…），并与版权页「著/编/译」一致（见 TYP-020）",
+   "severity": "warning",
+   "fix_level": "auto/suggest",
+   "spec": [
+    "01 §4.3"
+   ],
+   "hint": "让 refines 指向存在的 id，否则删除；给作者、译者元素补 role。"
+  },
+  "STR-023": {
+   "priority": "P0",
+   "title": "内容文档、CSS、OPF、NCX 必须能按 UTF-8 解码，且 XML 声明（",
+   "description": "内容文档、CSS、OPF、NCX 必须能按 UTF-8 解码，且 XML 声明（若有）为 utf-8；解码失败或声明与实际不符时探测并转码（旧书常见 GBK/GB18030/Big5/UTF-16）",
+   "severity": "error",
+   "fix_level": "auto/manual",
+   "spec": [
+    "02 §1.3"
+   ],
+   "hint": "把文件从 GBK、Big5 等编码转成 UTF-8；转完请抽查文字是否正常。"
+  },
+  "STR-024": {
+   "priority": "P0",
+   "title": "按书豁免记录自检（见 §7）",
+   "description": "按书豁免记录自检（见 §7）：理由必填；规则编号存在；文件与定位能解析；每条豁免至少命中一个问题；无重复与冗余条目",
+   "severity": "error（缺理由、格式错、含行号）；warning（重复、冗余、规则不存在、书标识不符）；info（未命中、文件已不存在、范围过宽、定位易漂移）",
+   "fix_level": "manual",
+   "spec": [
+    "—（§7）"
+   ],
+   "hint": "补全理由、改正格式，或删除不再命中的豁免条目。"
+  },
+  "STR-025": {
+   "priority": "P2",
+   "title": "书名拆分与替代书名",
+   "description": "书名拆分与替代书名：`dc:title` 形如「主标题：副标题」「主标题——副标题」时，建议拆成 main/subtitle/expanded 三条（顺序固定，`expanded` 保留整串）；书名含数字或有常见简称时，提示是否加 `dcterms:alternative` 或 `title-type=short`",
+   "severity": "info",
+   "fix_level": "suggest",
+   "spec": [
+    "01 §4.3"
+   ],
+   "hint": "书名带副标题时，可拆成主标题、副标题、完整标题三条元数据。"
+  },
+  "SEM-001": {
+   "priority": "P0",
+   "title": "内容文档是良构 XML（XHTML 序列化）",
+   "description": "内容文档是良构 XML（XHTML 序列化）：标签配对、属性有引号、`<br/> <img/> <hr/>` 自闭合、无 HTML 命名实体（`&nbsp; &copy; &mdash;` 在 XML 中未定义，只有 `&amp; &lt; &gt; &quot; &apos;`）；文本中未转义的 `<`、`&` 与游离的 `>` 也算（源自 se lint x-008 的意图）",
+   "severity": "error",
+   "fix_level": "auto",
+   "spec": [
+    "02 §1.2",
+    "02 §1.4"
+   ],
+   "hint": "重新解析并输出为 XHTML：命名实体换成字符，文本里的 < > & 转义。"
+  },
+  "SEM-002": {
+   "priority": "P0",
+   "title": "根结构",
+   "description": "根结构：`<html xmlns=\"http://www.w3.org/1999/xhtml\">`，声明 `xmlns:epub`（用到 `epub:type` 时），`xml:lang` 与 `lang` 同值；推荐 `<!DOCTYPE html>`（不是 XHTML 1.1 DTD）；文件为 UTF-8（序列化时写 XML 声明 `<?xml version=\"1.0\" encoding=\"utf-8\"?>`，见 §0.4）。`<meta charset>` 在 EPUB 3 的 XHTML 中合法但有 XML 声明时多余，口径见 SEM-024",
+   "severity": "error（命名空间错）；warning（缺 lang、旧 DOCTYPE）",
+   "fix_level": "auto",
+   "spec": [
+    "02 §1.1",
+    "04 4.1.3.1"
+   ],
+   "hint": "规范化根元素：补命名空间，lang 与 xml:lang 同值，DOCTYPE 用 <!DOCTYPE html>。"
+  },
+  "SEM-003": {
+   "priority": "P0",
+   "title": "<title> 存在且非空，内容为本文档标题（非文件名）",
+   "description": "`<title>` 存在且非空，内容为本文档标题（非文件名）；`title` 里只能是纯文本，不得含子元素（源自 se lint x-010 的意图）",
+   "severity": "error（空）；warning（与首标题无关/为文件名）",
+   "fix_level": "auto",
+   "spec": [
+    "02 §1.1",
+    "04 4.3.3.6"
+   ],
+   "hint": "以文档首个标题（不含副标题）填写 title，title 里只放纯文本。"
+  },
+  "SEM-004": {
+   "priority": "P0",
+   "title": "id 在文档内唯一且为合法 NCName（字母/下划线开头，不含空格与冒号",
+   "description": "`id` 在文档内唯一且为合法 NCName（字母/下划线开头，不含空格与冒号；不以数字开头）；同一目标文档内不得因拆分合并出现重复；已有 id 只要求文件内唯一，新生成的 id 要求全书唯一（04 4.1.5.7）",
+   "severity": "error",
+   "fix_level": "auto",
+   "spec": [
+    "02 §10.2",
+    "04 4.1.5.4",
+    "04 4.1.5.7"
+   ],
+   "hint": "重命名重复或不合法的 id，并同步改所有指向它的链接。"
+  },
+  "SEM-005": {
+   "priority": "P0",
+   "title": "内部链接有效",
+   "description": "内部链接有效：相对 `href`/`src` 指向存在的文件，带片段则该 id 存在；`href` 不含未编码空格；无空 `href`；不以 `file:` 开头",
+   "severity": "error",
+   "fix_level": "suggest/auto",
+   "spec": [
+    "02 §10.1"
+   ],
+   "hint": "修正链接的路径或片段；找不到目标时删链接、保留文字。"
+  },
+  "SEM-006": {
+   "priority": "P0",
+   "title": "标题不跳级（h2 后直接 h4）",
+   "description": "标题不跳级（`h2` 后直接 `h4`）；同类标题（所有章、所有部）同级；无「用 `<p>` 冒充标题」的伪标题（见 TYP-006/SEM-008）。标题数字与全书层级的对应见 SEM-027",
+   "severity": "warning",
+   "fix_level": "auto/suggest",
+   "spec": [
+    "02 §4.1",
+    "04 4.3.1.3"
+   ],
+   "hint": "把跳级的标题改成上一级加 1；全书整体偏移时请用户确认。"
+  },
+  "SEM-007": {
+   "priority": "P0",
+   "title": "注释（脚注/尾注）配对",
+   "description": "注释（脚注/尾注）配对：每个 `noteref` 有目标；每条注有回链（正文→注、注→正文，双向）；全书连续编号、不分章、不重复；注号与注文的 id 命名规整（04 4.12）",
+   "severity": "warning",
+   "fix_level": "auto/suggest",
+   "spec": [
+    "04 4.12.1",
+    "04 4.12.4",
+    "04 4.12.5",
+    "02 §7.2"
+   ],
+   "hint": "给缺回链的注补回链；孤立的注号或注文请用户对应。"
+  },
+  "SEM-008": {
+   "priority": "P1",
+   "title": "标题标签滥用",
+   "description": "标题标签滥用：用 `h1–h6` 仅为改字号（文本过长 >40 字、句末有句号/逗号、整句对话、一个页面多个并列 h1 却非各章）",
+   "severity": "warning",
+   "fix_level": "llm",
+   "spec": [
+    "04 4.3.1.7",
+    "02 §9"
+   ],
+   "hint": "判断它是标题还是正文；是正文就把 h* 改成 p。"
+  },
+  "SEM-009": {
+   "priority": "P1",
+   "title": "无意义 div 嵌套与 span 滥用",
+   "description": "无意义 `div` 嵌套与 `span` 滥用：同一块多层无 class 的 `div`；`span` 仅为包装整段文字；整段套 `<font>`/`<center>`；单个子元素的 `hgroup`/`header` 冗余包装（源自 se lint s-009 的意图）",
+   "severity": "warning",
+   "fix_level": "auto",
+   "spec": [
+    "04 4.3.3.3",
+    "02 §9"
+   ],
+   "hint": "展平没有 class 或 id 的空壳容器；单子元素的 hgroup、header 拆包。"
+  },
+  "SEM-010": {
+   "priority": "P1",
+   "title": "epub:type 使用正确",
+   "description": "`epub:type` 使用正确：值来自 EPUB Structural Semantics Vocabulary（如 `cover frontmatter bodymatter backmatter chapter part titlepage copyright-page toc foreword preface epilogue appendix glossary bibliography index noteref footnote pagebreak`）；`bodymatter` 等分区用在 `body`/`section`；非法值与误用报警；不得写已弃用的 `endnote`；`label`、`ordinal` 不在词表内，序号只能写 `z3998:ordinal`；`z3998:dateline`、`z3998:act` 不存在；同一元素的值不超过 3 个且不重复（源自 se lint s-031 的意图）；SSV 与 `z3998:` 同义时用 SSV；`h1`–`h6` 上不写 `epub:type=\"title\"`；不用 `se:` 词表，输入书已声明前缀的其他词表值原样保留，不报错（04 4.1.4）",
+   "severity": "warning",
+   "fix_level": "auto/suggest/llm",
+   "spec": [
+    "04 4.1.4",
+    "02 §6"
+   ],
+   "hint": "把 epub:type 改成词表里存在的值，去掉重复值，并同写对应的 role。"
+  },
+  "SEM-011": {
+   "priority": "P1",
+   "title": "章节用 section 包裹且含标题（无标题须有 aria-label，见 SE",
+   "description": "章节用 `section` 包裹且含标题（无标题须有 `aria-label`，见 SEM-029）；`body` 的直接子元素只能是 `section`、`article`、`nav`（封面单图页与导航文档除外，04 4.2.1.1）；一个 `section` 只有一个标题块，并列单元各自一个 `section`（源自 se lint s-069、s-071、s-075 的意图）",
+   "severity": "info（无标题 `section`）；warning（`body` 直接子元素不合规、一个 `section` 多个标题块）",
+   "fix_level": "auto/suggest",
+   "spec": [
+    "04 4.2.1.1",
+    "04 4.2.3",
+    "04 4.3.1.4",
+    "02 §4.1"
+   ],
+   "hint": "给没有标题的 section 补标题或 aria-label；body 的直接子元素只留 section、article、nav。"
+  },
+  "SEM-012": {
+   "priority": "P1",
+   "title": "注号写法",
+   "description": "注号写法：`a.noteref`，不包 `sup`（04 4.12.1.1）；文字是阿拉伯数字，不带方括号、圈码、「注」字（04 4.12.1.2）；注号前后无多余空白（04 4.12.1.10）；句末注号放在标点之后，整句引文的注号放在闭引号之外，全书同一种位置，只报少数派（04 4.12.1.7–4.12.1.9，源自 se lint t-020 的意图）；链接文字不是「点击此处」",
+   "severity": "warning",
+   "fix_level": "auto",
+   "spec": [
+    "04 4.12.1.1",
+    "04 4.12.1.2",
+    "04 4.12.1.7–4.12.1.10",
+    "02 §7.1"
+   ],
+   "hint": "注号写成不带 sup 的 a.noteref，文字用阿拉伯数字，前后不留空白，放在句末标点之后。"
+  },
+  "SEM-013": {
+   "priority": "P1",
+   "title": "表格语义",
+   "description": "表格语义：有 `th`（表头）与 `scope`；`thead/tbody/tfoot` 顺序（`tfoot` 在 `tbody` 后——HTML5 允许在 `thead` 后或末尾，保持一致）；`colspan/rowspan` 与单元格数一致；不用表格做版面；表格宽度 `%` 不用绝对像素；有 `caption` 或前置表题；`tr` 必须在 `thead/tbody/tfoot` 里，`table` 须有 `tbody`（源自 se lint s-042 的意图）；表题用 `caption` 写在第一个子元素位置；数字列 `td` 加 `num` 类（04 4.13.1）",
+   "severity": "warning",
+   "fix_level": "suggest",
+   "spec": [
+    "04 4.13.1",
+    "02 §5.6"
+   ],
+   "hint": "tr 放进 thead 或 tbody，首行改 th 并补 scope，补 caption。"
+  },
+  "SEM-014": {
+   "priority": "P1",
+   "title": "伪上下标与伪列表",
+   "description": "伪上下标与伪列表：`x2`、`H2O` 之类应为 `sub`/`sup`；手工编号段落：阿拉伯数字序号（`1.`、`2.`）连续 ≥3 段应为 `ol`，手写圆点（`·•●■`）连续段应为 `ul`；中文序号（`一、`、`（一）`、`①`）是文本，保持 `p.item`，不转 `ol`（04 4.10.3）",
+   "severity": "info",
+   "fix_level": "llm/suggest",
+   "spec": [
+    "04 4.10.3.1–4.10.3.3",
+    "02 §5.3"
+   ],
+   "hint": "阿拉伯数字连续序号改 ol，手写圆点改 ul；中文序号（一、（一）①）保持文本；化学式补 sub 或 sup。"
+  },
+  "SEM-015": {
+   "priority": "P1",
+   "title": "弃用/不推荐元素与属性",
+   "description": "弃用/不推荐元素与属性：`font center big tt strike frame`、`align valign bgcolor border width/height(表)`、`name`(a)、`<a>` 无 href；HTML5 已不再有的 `rb rbc rtc`（旧 ruby 写法）、`acronym`；MathML 弃用元素 `mfenced` 等（源自 se lint s-017 的意图）",
+   "severity": "warning",
+   "fix_level": "auto",
+   "spec": [
+    "02 §9"
+   ],
+   "hint": "用 CSS 和 class 代替弃用的元素与属性。"
+  },
+  "SEM-016": {
+   "priority": "P1",
+   "title": "b/i/em/strong 语义",
+   "description": "`b/i/em/strong` 语义：整段/整标题被 `b` 包裹（实为标题样式）；`i` 不用于表示外文（中文没有真斜体，04 4.1.3.7），书名用 `cite`；`<u>` 滥用（与链接混淆）",
+   "severity": "info",
+   "fix_level": "suggest",
+   "spec": [
+    "04 4.1.3.7",
+    "04 4.6.1.7.3",
+    "02 §5.2"
+   ],
+   "hint": "整段加粗改用样式类；书名用 cite；外文用 span lang，不用 i。"
+  },
+  "SEM-017": {
+   "priority": "P1",
+   "title": "figure/figcaption 分组",
+   "description": "`figure/figcaption` 分组：图片与相邻图注段落应合并为 `figure`（语义见 TYP-008）；同一图只有一个 caption；`figcaption` 只能在 `figure` 之内、位于图下方（04 4.11.3.1）",
+   "severity": "info",
+   "fix_level": "suggest",
+   "spec": [
+    "04 4.11.1.1",
+    "04 4.11.3.1",
+    "04 4.11.3.2",
+    "02 §5.5"
+   ],
+   "hint": "把图和紧邻的图注包进 figure，图注改用 figcaption。"
+  },
+  "SEM-018": {
+   "priority": "P2",
+   "title": "脚本/表单/iframe/嵌入",
+   "description": "脚本/表单/iframe/嵌入：默认不应出现；若有须 `scripted`/声明并有无脚本回退；`audio`/`video` 不在此列，按 RES-020 检查；指向 `.mp3/.mp4` 的 `embed`/`object` 转为 `audio`/`video`（04 4.18.1.6）",
+   "severity": "warning",
+   "fix_level": "manual/suggest",
+   "spec": [
+    "02 §5.8",
+    "04 4.18.1.6"
+   ],
+   "hint": "确认是否真需要脚本、表单、嵌入内容；不需要就移除。"
+  },
+  "SEM-019": {
+   "priority": "P2",
+   "title": "注音 ruby 结构",
+   "description": "注音 ruby 结构：写法 `<ruby>汉<rp>（</rp><rt>han</rt><rp>）</rp></ruby>`，`rp` 必写且不设 `display:none`（04 4.17.1.1–4.17.1.2）；不使用 `rb/rbc/rtc`；`rt` 内容为合法拼音（音调符号 `āáǎà`）；逐词注音时 `rt` 的音节数须等于汉字数，不符只报告（04 4.17.1.4）",
+   "severity": "warning",
+   "fix_level": "auto/llm",
+   "spec": [
+    "04 4.17.1",
+    "02 §5.4"
+   ],
+   "hint": "改成 ruby、汉字、rp、rt、rp 的写法，去掉 rb。"
+  },
+  "SEM-020": {
+   "priority": "P2",
+   "title": "特殊块语义识别",
+   "description": "特殊块语义识别：引文 `blockquote`、诗歌（`p.stanza` 内每行一个 `span.line`）、书信（称谓/正文/落款）、剧本对白、条款",
+   "severity": "info",
+   "fix_level": "llm",
+   "spec": [
+    "04 4.6",
+    "04 4.7",
+    "04 4.8",
+    "04 4.9",
+    "02 §5.7"
+   ],
+   "hint": "把识别出的诗歌、书信、引文、对白重写成 04 对应小节的结构。"
+  },
+  "SEM-021": {
+   "priority": "P2",
+   "title": "导航外的目录页",
+   "description": "导航外的目录页：书内有人工目录页（`目录`/`Contents` 标题）与 nav 并存时，页面链接须有效，且不应遗漏",
+   "severity": "warning",
+   "fix_level": "auto",
+   "spec": [
+    "04 4.4.1.4–4.4.1.6"
+   ],
+   "hint": "重建人工目录页的链接，或按配置删除该页。"
+  },
+  "SEM-022": {
+   "priority": "P0",
+   "title": "空元素与游离换行",
+   "description": "空元素与游离换行：无子节点且无文字（或仅空白）的元素（`br/hr/img/meta/link/input` 与用作锚点的 `<a id>` 除外）；块首、块尾孤立的 `<br/>`；块元素之间或之后游离的 `<br/>`。`p` 的空段由 TYP-002 处理，本规则泛化到 `span/div/b/em/a` 等",
+   "severity": "warning",
+   "fix_level": "auto",
+   "spec": [
+    "04 4.5.1.1",
+    "04 4.7.2.3",
+    "02 §9"
+   ],
+   "hint": "删除这个空元素或多余的换行。"
+  },
+  "SEM-023": {
+   "priority": "P2",
+   "title": "从未被任何 href、CSS 或脚本引用的 id",
+   "description": "从未被任何 `href`、CSS 或脚本引用的 `id`",
+   "severity": "info",
+   "fix_level": "manual/suggest",
+   "spec": [
+    "04 4.1.5.2"
+   ],
+   "hint": "确认没有外部链接依赖后，可以删掉这个 id。"
+  },
+  "SEM-024": {
+   "priority": "P1",
+   "title": "head 白名单",
+   "description": "`head` 白名单：只保留 `title`、`link[rel=stylesheet]`，可选 `meta[name=viewport]`；`meta charset`（EPUB 3 合法，但有 XML 声明时多余）、私有 `meta`、内联 `style`、`script`、`base` 报告",
+   "severity": "info（`meta charset`、viewport）；warning（其余）",
+   "fix_level": "auto",
+   "spec": [
+    "02 §1.1"
+   ],
+   "hint": "删掉 head 里多余的元素，只留 title 和样式表链接。"
+  },
+  "SEM-025": {
+   "priority": "P2",
+   "title": "出现 <pre>",
+   "description": "出现 `<pre>`：多为 TXT 转换遗留的未排版文本",
+   "severity": "info",
+   "fix_level": "suggest",
+   "spec": [
+    "02 §9"
+   ],
+   "hint": "把 pre 里的文字拆成普通段落。"
+  },
+  "SEM-026": {
+   "priority": "P0",
+   "title": "标题角色类",
+   "description": "标题角色类：每个内容文档的章首标题（章、前言、后记等每文件的首个标题）带 `chapter-title`；部、卷标题带 `part-title`；章内第一级标题带 `section-title`，第二级带 `subsection-title`，更深层不带；节标题不得带 `chapter-title`/`part-title`",
+   "severity": "warning",
+   "fix_level": "auto",
+   "spec": [
+    "04 4.3.1.5",
+    "04 4.3.6.1",
+    "04 4.3.6.4",
+    "04 4.3.6.6"
+   ],
+   "hint": "给章首标题加 chapter-title，节标题加 section-title，不要把章首类用在节标题上。"
+  },
+  "SEM-027": {
+   "priority": "P0",
+   "title": "标题数字与全书层级一致",
+   "description": "标题数字与全书层级一致：`h1` 只用于书名页的书名，其余从 `h2` 起；标题数字 = nav 深度 + 1（无「部」时章 `h2`、节 `h3`，有「部」时部 `h2`、章 `h3`）；一个文件里最高级标题只出现一次（并列单元各一个）；`h*` 的父元素只能是 `section/article/header/hgroup`",
+   "severity": "warning",
+   "fix_level": "auto/suggest",
+   "spec": [
+    "04 4.2.4.2",
+    "04 4.3.1.1–4.3.1.4",
+    "04 4.3.1.6",
+    "04 4.3.1.8"
+   ],
+   "hint": "把标题数字改成与目录深度相符：章用 h2，节用 h3；h1 只留给书名页。"
+  },
+  "SEM-028": {
+   "priority": "P1",
+   "title": "标题拆分误用",
+   "description": "标题拆分误用：「第一章　开端」被 `hgroup` 拆成章号、章名两个元素；标题里含 `<br/>`、页码、句末句号；`hgroup` 用于主标题加副标题之外的内容；副标题 `p` 缺 `class=\"subtitle\" epub:type=\"subtitle\" role=\"doc-subtitle\"`",
+   "severity": "warning",
+   "fix_level": "auto/llm",
+   "spec": [
+    "04 4.3.2.1",
+    "04 4.3.2.4",
+    "04 4.3.2.5",
+    "04 4.3.3"
+   ],
+   "hint": "章号和章名放在同一个标题里，只有真正的副标题才用 hgroup。"
+  },
+  "SEM-029": {
+   "priority": "P1",
+   "title": "无标题页的写法",
+   "description": "无标题页的写法：没有标题的结构页（献辞、题词、无题名卷首语）写 `section` + `aria-label` + `class=\"no-head\"`，带 `epub:type` 与 `role`，不标 `chapter`；没有标题又没有结构语义的内容块用 `div`",
+   "severity": "warning",
+   "fix_level": "auto",
+   "spec": [
+    "04 4.2.3",
+    "04 4.6.3.1",
+    "04 4.6.5.1"
+   ],
+   "hint": "给没有标题的页写 aria-label 并加 no-head 类；没有语义的内容块用 div。"
+  },
+  "SEM-030": {
+   "priority": "P1",
+   "title": "图表 id",
+   "description": "图表 id：`figure` 的 id 只在被插图目录或正文引用时才生成，写成 `figure-N`，`table` 同理写 `table-N`，N 为全书流水号，不含章号；全书唯一，重复时第 2 处起写 `figure-N-2`；一个 `figure` 只放一张主图（并列图用 `figure-group`）",
+   "severity": "warning",
+   "fix_level": "auto",
+   "spec": [
+    "04 4.11.1.3",
+    "04 4.11.1.7",
+    "04 4.11.3.3",
+    "04 4.13.1.5",
+    "04 4.13.1.9"
+   ],
+   "hint": "图表 id 写成 figure-N、table-N，全书编号不重复，不要拿图号文字做 id。"
+  },
+  "SEM-031": {
+   "priority": "P0",
+   "title": "注号与注文 id",
+   "description": "注号与注文 id：注号 `a` 的 id 是 `noteref-N`，注文 `li` 的 id 是 `note-N`，N 与注序号相同（全书流水号）；同一条注被多处引用时，第一处 `noteref-N`，之后 `noteref-N-2`、`noteref-N-3`，所有注号的 `href` 都指向同一个 `note-N`，回链只指第一处",
+   "severity": "error",
+   "fix_level": "auto",
+   "spec": [
+    "04 4.12.1.4",
+    "04 4.12.1.6",
+    "04 4.12.3.1",
+    "04 4.12.4.4",
+    "02 §7.3"
+   ],
+   "hint": "同一条注被引用多次时，第二处起 id 写成 noteref-N-2，回链只指第一处。"
+  },
+  "SEM-032": {
+   "priority": "P1",
+   "title": "尾注文件结构",
+   "description": "尾注文件结构：`endnotes.xhtml` 在 spine 最后，`body` 为 `backmatter`；只含一个 `section#endnotes[class=endnotes][epub:type=endnotes][role=doc-endnotes]`，内有标题与**一个** `ol`——全书连续编号，不按章分组，不加章名小标题，不拆多个 `ol`；`li` 上只写 `id`，不写已弃用的 `epub:type=\"endnote\"`、`role=\"doc-endnote\"`",
+   "severity": "warning",
+   "fix_level": "auto/suggest",
+   "spec": [
+    "04 4.12.2",
+    "04 4.12.3.2",
+    "04 4.1.4.7",
+    "02 §7.2"
+   ],
+   "hint": "把各章末的注释合成书末一个连续编号的列表，注文 li 不写 epub:type。"
+  },
+  "SEM-033": {
+   "priority": "P1",
+   "title": "注文块结构与回链位置",
+   "description": "注文块结构与回链位置：注文含多段、引文、诗歌、列表时保留块结构，不压成一个 `p`；每条注有且只有一个回链；注文最后一个块是 `p` 时，回链放在其末尾、前面恰好一个空格；最后一个块不是 `p` 时，回链单独放在一个新 `p` 里，作 `li` 的最后一个子元素",
+   "severity": "warning",
+   "fix_level": "auto",
+   "spec": [
+    "04 4.12.3.3",
+    "04 4.12.4.1–4.12.4.3"
+   ],
+   "hint": "多块的注保留原来的段落结构，回链放在最后一段末尾，或另起一段。"
+  },
+  "SEM-034": {
+   "priority": "P1",
+   "title": "诗歌结构",
+   "description": "诗歌结构：一节诗一个 `p.stanza`；每行一个 `span.line`，`p.stanza` 内的文字全在 `span.line` 里；行间一个 `<br/>`，节末行后无 `<br/>`；缩进用 `indent-1..3`（最多 3 级），不用空格、全角空格、`&nbsp;`；节与节之间无空 `p`、`<br/><br/>`、`<hr/>`；不写成「`div.stanza` 里一行一个 `p`」「`pre`」「一行一个 `p`」",
+   "severity": "warning",
+   "fix_level": "auto/llm",
+   "spec": [
+    "04 4.7.2"
+   ],
+   "hint": "诗的每一节写成一个 p.stanza，每行包一个 span.line，缩进用 indent-N 类。"
+  },
+  "SEM-035": {
+   "priority": "P1",
+   "title": "诗歌语义与排版型",
+   "description": "诗歌语义与排版型：整首诗词曲的容器写 `z3998:poem`，节选残句写 `z3998:verse`，歌词 `z3998:song`，诗偈 `z3998:hymn`；`epub:type` 只写在容器（`div/blockquote/article`）上，一个容器一个值，不写在 `p.stanza`/`span.line` 上；每个容器有且仅有一个排版型类（`poem-center`/`poem-left`/`poem-ci`）；`poem-center` 的诗不用 `indent-N`；用了 `z3998:` 须声明前缀（SEM-036）",
+   "severity": "warning",
+   "fix_level": "auto/suggest",
+   "spec": [
+    "04 4.7.1",
+    "04 4.7.3",
+    "04 4.7.4"
+   ],
+   "hint": "给诗歌容器写 z3998:poem 或 z3998:verse，并选一个排版型类。"
+  },
+  "SEM-036": {
+   "priority": "P0",
+   "title": "z3998: 前缀声明",
+   "description": "`z3998:` 前缀声明：任何文档用了以 `z3998:` 开头的 `epub:type` 值，必须在 `<html>` 上声明 `epub:prefix=\"z3998: http://www.daisy.org/z3998/2012/vocab/structure/\"`，并已声明 `xmlns:epub`；`epub:prefix` 只能写在 `<html>` 上，写在 `<body>` 上无效",
+   "severity": "error",
+   "fix_level": "auto",
+   "spec": [
+    "04 4.1.4.3",
+    "04 4.7.1.5",
+    "04 4.8.1.6",
+    "04 4.11.1.10",
+    "02 §6.1"
+   ],
+   "hint": "在 html 根元素上加 epub:prefix 声明 z3998，或者去掉所有 z3998: 值。"
+  },
+  "SEM-037": {
+   "priority": "P2",
+   "title": "书信与剧本结构",
+   "description": "书信与剧本结构：`.letter` 容器内至少含一个 `z3998:salutation`，不用 `header`/`footer`，不嵌套 `.letter`；`z3998:dateline`、`z3998:act` 是不存在的词，不得使用；剧本对白写法 A/B 全书只用一种；`span.persona` 内不含空白与冒号",
+   "severity": "info",
+   "fix_level": "suggest",
+   "spec": [
+    "04 4.8.1",
+    "04 4.8.2.4",
+    "04 4.9.1.2",
+    "04 4.9.2"
+   ],
+   "hint": "书信、剧本只用词表里存在的 z3998 词，对白写法全书统一。"
+  },
+  "SEM-038": {
+   "priority": "P1",
+   "title": "拆分文件的可重组性",
+   "description": "拆分文件的可重组性：我们拆出的文件，顶层 `section` 写 `data-parent`，值为原父 `section` 的 id；输入书已有 `data-parent` 时校验：目标 id 存在、目标文件在 spine 中位于本文件之前、本文件标题层级 = 父层级 + 1",
+   "severity": "warning",
+   "fix_level": "auto/manual",
+   "spec": [
+    "04 4.2.4.3",
+    "04 4.2.4.4"
+   ],
+   "hint": "拆出的文件顶层 section 要写 data-parent 指回原父级。"
+  },
+  "SEM-039": {
+   "priority": "P1",
+   "title": "引文、题记、出处结构",
+   "description": "引文、题记、出处结构：`blockquote` 里至少有一个 `p`，不裸写文本；出处写在 `blockquote` 内最后一个子元素 `p.attribution`，以 `——` 开头（写在文字里，不用 CSS 生成），末尾不加句号；输入书的 `footer`、`p.source`、`p.inscription` 识别后统一为 `p.attribution`；章首题记 `blockquote.epigraph[epub:type=epigraph][role=doc-epigraph]`",
+   "severity": "warning",
+   "fix_level": "auto",
+   "spec": [
+    "04 4.6.1.1",
+    "04 4.6.1.7",
+    "04 4.6.1.8",
+    "04 4.6.2.1"
+   ],
+   "hint": "出处写成 blockquote 末尾的 p.attribution，以破折号开头，末尾不加句号。"
+  },
+  "SEM-040": {
+   "priority": "P2",
+   "title": "术语表结构",
+   "description": "术语表结构：`section#glossary[epub:type=glossary][role=doc-glossary]` 内一个 `dl.glossary`；`dt[epub:type=glossterm]` 内必含 `dfn`；`dd[epub:type=glossdef]` 至少含一个块级子元素；`dt` 与 `dd` 不孤立",
+   "severity": "info",
+   "fix_level": "suggest",
+   "spec": [
+    "04 4.19.1"
+   ],
+   "hint": "术语表的每个词条用 dt 加 dfn，释义用 dd，并给外层 section 标 glossary。"
+  },
+  "STY-001": {
+   "priority": "P0",
+   "title": "样式表可被解析",
+   "description": "样式表可被解析：无语法错误、无多余 `;`、花括号配对、无中文标点（`，；：（）“”`）混入代码（字符串与注释内除外）",
+   "severity": "error",
+   "fix_level": "auto",
+   "spec": [
+    "03 §2",
+    "04 4.1.2"
+   ],
+   "hint": "重新序列化样式表；全角标点换成英文标点。"
+  },
+  "STY-002": {
+   "priority": "P0",
+   "title": "引用完整",
+   "description": "引用完整：内容文档 `class`/`id` 选择器所引用的 class 在 CSS 中有定义（至少不报“不存在的样式”）；`url()`、`@import`、`@font-face src` 指向的资源存在；`<link rel=\"stylesheet\">` 目标存在并在 manifest",
+   "severity": "error（资源缺失）；warning（class 无定义）",
+   "fix_level": "auto/suggest",
+   "spec": [
+    "03 §10",
+    "04 4.1.1.1"
+   ],
+   "hint": "删除没有定义的 class 引用，或补上样式；缺失资源的规则请删除。"
+  },
+  "STY-003": {
+   "priority": "P1",
+   "title": "同一规则内属性重复/冲突（margin 与 margin-top 并存，或 fo",
+   "description": "同一规则内属性重复/冲突（`margin` 与 `margin-top` 并存，或 `font-size` 两次）",
+   "severity": "warning",
+   "fix_level": "auto",
+   "spec": [
+    "03 §10"
+   ],
+   "hint": "合并重复声明；简写与展开冲突时保留后写的。"
+  },
+  "STY-004": {
+   "priority": "P0",
+   "title": "正文首行缩进一致",
+   "description": "正文首行缩进一致：中文正文段 `text-indent` 计算值统一为 `indent.em`；不用空格/`&nbsp;`/`　` 造缩进（见 TYP-001）；首字下沉段、题记、诗歌、图注、标题等非正文块例外；`class=\"noindent\"` 的续段与 `p.sep`、`p.gap` 等有意无缩进的块不算偏离（04 4.5.1.5–4.5.1.7）",
+   "severity": "warning",
+   "fix_level": "auto",
+   "spec": [
+    "03 §5",
+    "04 4.5.1.2–4.5.1.4"
+   ],
+   "hint": "在正文类上统一写 text-indent，偏离的段改用正文类。"
+  },
+  "STY-005": {
+   "priority": "P0",
+   "title": "标题样式合理",
+   "description": "标题样式合理：同级标题（h1–h6）样式一致；字号逐级不增（h1≥h2≥h3…）；`line-height` 为无单位或 em（如 1.2–1.5）；上边距显著大于下边距（至少 1.5 倍）；标题 `text-indent:0`；标题字号不使用绝对像素；章首与章内各级标题的样式由角色类决定，不按数字（04 4.3.6.6）",
+   "severity": "warning",
+   "fix_level": "auto",
+   "spec": [
+    "03 §6",
+    "04 4.3.6.6"
+   ],
+   "hint": "套用标题模板：字号逐级不增，上边距大于下边距，标题不缩进。"
+  },
+  "STY-006": {
+   "priority": "P1",
+   "title": "内联 style 过多",
+   "description": "内联 `style` 过多：在 `[style]` 上改外观；应抽取为 class",
+   "severity": "info",
+   "fix_level": "auto/suggest",
+   "spec": [
+    "03 §10",
+    "04 4.1.1.1",
+    "04 4.5.1.8",
+    "04 4.11.1.6"
+   ],
+   "hint": "把重复的内联 style 换成注册表里的 class；找不到对应类就保留 style。"
+  },
+  "STY-007": {
+   "priority": "P1",
+   "title": "多样式叠加/嵌套",
+   "description": "多样式叠加/嵌套：`class=\"a b\"` 仅为凑效果；`<h2><span class=\"bold\">` 嵌套仅承载单一声明",
+   "severity": "info",
+   "fix_level": "auto",
+   "spec": [
+    "03 §10"
+   ],
+   "hint": "合并叠加的 class，把 span 上单一的声明并到父元素。"
+  },
+  "STY-008": {
+   "priority": "P1",
+   "title": "长度单位可调节",
+   "description": "长度单位可调节：正文字号不写 `px/pt`（用 `em`/`%`/`rem` 或不设）；`body` 不设固定 `width/height`；`line-height` 无单位；图片宽度用 `%`/`max-width` 而非固定像素；图宽优先用 `w-100`/`w-80`/`w-60` 类（04 4.11.1.5）",
+   "severity": "warning",
+   "fix_level": "auto/suggest",
+   "spec": [
+    "03 §3",
+    "04 4.11.1.5"
+   ],
+   "hint": "把 font-size 的 px 或 pt 改成 em，line-height 改成无单位数。"
+  },
+  "STY-009": {
+   "priority": "P1",
+   "title": "font-family 栈",
+   "description": "`font-family` 栈：中文类须含中文回退与通用族（`serif`/`sans-serif`），不只写一个字体名；不依赖未内嵌的特定字体",
+   "severity": "warning",
+   "fix_level": "auto",
+   "spec": [
+    "03 §8.2"
+   ],
+   "hint": "给字体栈补上通用族（serif 或 sans-serif）。"
+  },
+  "STY-010": {
+   "priority": "P1",
+   "title": "与流式布局冲突的属性",
+   "description": "与流式布局冲突的属性：`position:absolute/fixed`、固定 `height`（容器）、`overflow:hidden` 用于正文、`float` 用于非图片/首字下沉的版面、`display:none` 隐藏正文；`height`/`top`/`bottom` 用百分比（阅读器里不稳定，源自 se lint c-025 的意图）；整页留白用 `%` margin，不用 `vh`、`calc()`（04 4.1.2.8）",
+   "severity": "warning",
+   "fix_level": "suggest",
+   "spec": [
+    "03 §2",
+    "03 §10",
+    "04 4.1.2.8"
+   ],
+   "hint": "去掉绝对定位、固定高度等与流式布局冲突的属性。"
+  },
+  "STY-011": {
+   "priority": "P1",
+   "title": "类名规范",
+   "description": "类名规范：输出类名只用 `[a-z][a-z0-9-]*`（`kebab`，04 4.1.1.3），不以数字开头，不含 `_`、中文、空格；输入书的 `camel` 类名仅在 `css.class_style=keep` 时保留，默认转 kebab；命名按语义不按外观（`.red`、`.big` 为外观命名；04 4.1.1.4.1 列出的通用工具类除外）；同一书仅一种风格",
+   "severity": "info",
+   "fix_level": "auto/llm",
+   "spec": [
+    "04 4.1.1.3",
+    "04 4.1.1.4"
+   ],
+   "hint": "把类名改成小写连字符、按角色命名，并同步改全书的 class。"
+  },
+  "STY-012": {
+   "priority": "P1",
+   "title": "样式表数量与重复",
+   "description": "样式表数量与重复：EPUB 允许多个样式表；本规则只查：相同内容的样式表重复；每个文档引用的 CSS 集合不一致；`@import` 链过深（>2 层）",
+   "severity": "info",
+   "fix_level": "suggest",
+   "spec": [
+    "03 §2"
+   ],
+   "hint": "合并重复的样式表，让各文档引用相同的样式表集合。"
+  },
+  "STY-013": {
+   "priority": "P1",
+   "title": "选择器简单",
+   "description": "选择器简单：禁用高开销/低兼容选择器（`:nth-child`、`:has`、属性正则选择器、`*` 通配；跨阅读器不稳定）；选择器链 ≤3 层",
+   "severity": "info",
+   "fix_level": "suggest",
+   "spec": [
+    "03 §10",
+    "04 4.1.2.6"
+   ],
+   "hint": "把复杂选择器展平成 class 选择器。"
+  },
+  "STY-014": {
+   "priority": "P1",
+   "title": "分页控制",
+   "description": "分页控制：标题 `break-after:avoid`（并写 `page-break-after:avoid` 兼容旧引擎）；图+图注 `break-inside:avoid`；章首 `break-before:page`（`page-break-before:always`）；`orphans`/`widows` 设 2；这些属于建议而非硬规则，阅读器可忽略【需实测各引擎支持度】；同一文件内多个并列 `section` 须设 `break-before`/`break-after`（源自 se lint c-020 的意图）",
+   "severity": "info",
+   "fix_level": "auto",
+   "spec": [
+    "03 §2",
+    "03 §6.1"
+   ],
+   "hint": "在标题、图表、章首规则上补分页属性（break-* 与旧名 page-break-* 同写）。"
+  },
+  "STY-015": {
+   "priority": "P1",
+   "title": "孤立未用规则",
+   "description": "孤立未用规则：CSS 中的类选择器在全书没有任何元素使用",
+   "severity": "info",
+   "fix_level": "auto",
+   "spec": [
+    "03 §10"
+   ],
+   "hint": "删除全书没有任何元素使用的类选择器。"
+  },
+  "STY-016": {
+   "priority": "P2",
+   "title": "颜色",
+   "description": "颜色：对比度（文字色 vs 背景色）≥ `contrast.min`；避免荧光色、浅灰字；颜色种类 ≤3（主色取自封面）；背景色上反白字慎用",
+   "severity": "warning",
+   "fix_level": "suggest",
+   "spec": [
+    "03 §9"
+   ],
+   "hint": "把低对比度的颜色向同色系调深或调浅，直到达标。"
+  },
+  "STY-017": {
+   "priority": "P2",
+   "title": "用户可覆盖",
+   "description": "用户可覆盖：不强制 `!important` 于字号/行高/字体；不锁死 `color`+`background` 的某一半（只设其一导致深色模式不可读）；不用 `-webkit-text-size-adjust:none`【补】；不整体写死 `text-align:left/right`，竖排书尤其不可（源自 se lint c-016 的意图；正文两端对齐 `justify` 是我们的默认，不在此列）",
+   "severity": "warning",
+   "fix_level": "auto",
+   "spec": [
+    "03 §1.1",
+    "03 §9"
+   ],
+   "hint": "去掉字号、行高、字体上的 !important；color 与 background 成对设置或都不设。"
+  },
+  "STY-018": {
+   "priority": "P2",
+   "title": "竖排",
+   "description": "竖排：`writing-mode:vertical-rl` 与 `text-orientation`、`text-combine-upright`、`spine@page-progression-direction` 配套；竖排中的西文/数字方向；`writing-mode`、spine 方向、语言三者一致（04 4.15.1.2）；竖排样式放独立的 `vertical.css`（04 4.15.1.3）",
+   "severity": "info",
+   "fix_level": "suggest",
+   "spec": [
+    "03 §7.6",
+    "04 4.15"
+   ],
+   "hint": "竖排书补齐 writing-mode、text-orientation、text-combine-upright 与 spine 方向。"
+  },
+  "STY-019": {
+   "priority": "P2",
+   "title": "@font-face 规范",
+   "description": "`@font-face` 规范：`src` 格式 `woff2/woff/ttf/otf`；含 `format()` 提示；`font-family` 名与使用处一致；声明在 manifest 的字体文件存在（RES-009）",
+   "severity": "warning",
+   "fix_level": "auto/suggest",
+   "spec": [
+    "03 §8.3",
+    "05 §4.2"
+   ],
+   "hint": "补全 @font-face 的 format()；缺失的字体文件请补回或删规则。"
+  },
+  "STY-020": {
+   "priority": "P1",
+   "title": "样式里用到命名空间前缀的选择器（epub|type、xml|lang）必须有同名",
+   "description": "样式里用到命名空间前缀的选择器（`epub|type`、`xml|lang`）必须有同名 `@namespace` 声明，否则选择器静默失效；我们生成的模板不用 `epub:type` 属性选择器（见 STY-026），本规则只管输入书的 CSS",
+   "severity": "warning",
+   "fix_level": "auto",
+   "spec": [
+    "03 §2"
+   ],
+   "hint": "样式表里用了 epub| 之类的前缀，就要在开头声明对应的 @namespace。"
+  },
+  "STY-021": {
+   "priority": "P1",
+   "title": "同一选择器文本在同一样式表中重复定义，应合并（只为覆盖基础样式的除外）",
+   "description": "同一选择器文本在同一样式表中重复定义，应合并（只为覆盖基础样式的除外）",
+   "severity": "info",
+   "fix_level": "auto",
+   "spec": [
+    "03 §10"
+   ],
+   "hint": "把重复的同名选择器合并成一条规则。"
+  },
+  "STY-022": {
+   "priority": "P1",
+   "title": "text-align:center 的块，其 text-indent 必须为 0",
+   "description": "`text-align:center` 的块，其 `text-indent` 必须为 0；任何块都适用，不限标题",
+   "severity": "warning",
+   "fix_level": "auto",
+   "spec": [
+    "03 §5"
+   ],
+   "hint": "居中的段落要把首行缩进设为 0，否则文字会偏离中心。"
+  },
+  "STY-023": {
+   "priority": "P2",
+   "title": "数字列占多数的表格设 font-variant-numeric:tabular-",
+   "description": "数字列占多数的表格设 `font-variant-numeric:tabular-nums`",
+   "severity": "info",
+   "fix_level": "suggest",
+   "spec": [
+    "03 §7.3"
+   ],
+   "hint": "数字列加等宽数字，方便按位对齐。"
+  },
+  "STY-024": {
+   "priority": "P2",
+   "title": "嵌套强调样式须与外层有区分",
+   "description": "嵌套强调样式须与外层有区分：楷体段内的强调词、加粗标题内的 `strong` 等，内外样式不得相同，否则强调失效",
+   "severity": "info",
+   "fix_level": "suggest",
+   "spec": [
+    "03 §7.4",
+    "03 §7.7"
+   ],
+   "hint": "嵌套的强调要和外层样式不同，否则强调失效。"
+  },
+  "STY-025": {
+   "priority": "P1",
+   "title": "重建输出的文档里，class 值须在 04 §4.1.1 类名注册表内（@CLA",
+   "description": "重建输出的文档里，`class` 值须在 04 §4.1.1 类名注册表内（`@CLASS_REGISTRY`）；类名只用小写字母和连字符；新增类名须先登记。只做质检不重建内容文档时降为 info",
+   "severity": "warning（重建输出）；info（只质检）",
+   "fix_level": "auto/suggest",
+   "spec": [
+    "04 4.1.1.1–4.1.1.3"
+   ],
+   "hint": "把 class 改成 04 类名注册表里的名字；没有对应的类就去掉。"
+  },
+  "STY-026": {
+   "priority": "P1",
+   "title": "样式钩子与生成内容",
+   "description": "样式钩子与生成内容：模板与重建输出的 CSS 不用 id 选择器、`epub:type` 属性选择器做样式钩子；不用 `::before`/`::after` 的 `content` 生成文字或符号（出处破折号、序号后空格都写在文本里）；不写 `!important`；模板不写 `color`/`background`（装饰灰与 `.accent` 除外）；一次性样式：同类元素 ≥3 个用 class，<3 个用「类 + 元素」结构选择器",
+   "severity": "warning",
+   "fix_level": "suggest",
+   "spec": [
+    "04 4.1.2.4–4.1.2.7",
+    "04 4.1.2.9",
+    "03 §10"
+   ],
+   "hint": "不要用 id 或 epub:type 选择器写样式，也别用 ::before 生成文字。"
+  },
+  "TYP-001": {
+   "priority": "P0",
+   "title": "缩进一致",
+   "description": "缩进一致：不得用全角空格 `　`、`&nbsp;`、半角空格序列做首行缩进；同类段落缩进方式须统一（要么全用 CSS `text-indent`，要么无缩进）；诗歌行首的手写缩进由 SEM-034 转 `indent-N`，不在本规则清除；被块元素打断的续段用 `noindent`，不用空格补（04 4.5.1.5）",
+   "severity": "warning",
+   "fix_level": "auto",
+   "spec": [
+    "04 4.5.1.2",
+    "03 §5"
+   ],
+   "hint": "删除段首的空格类字符，缩进交给 CSS 的 text-indent。"
+  },
+  "TYP-002": {
+   "priority": "P0",
+   "title": "空段落与伪空行",
+   "description": "空段落与伪空行：`<p></p>`、`<p>&nbsp;</p>`、`<p><br/></p>`、连续 `<br/>` 造间距、段内首尾 `<br/>`；段间多余空行用来拉间距；块首尾孤立的 `<br/>`、块元素之后游离的 `<br/>` 与其他空元素由 SEM-022 统一处理",
+   "severity": "warning",
+   "fix_level": "auto",
+   "spec": [
+    "04 4.5.1.1",
+    "04 4.5.1.7"
+   ],
+   "hint": "删除空段落和多余的 br；场景转换处的空段改成 p.gap。"
+  },
+  "TYP-003": {
+   "priority": "P0",
+   "title": "非正常换行/段落断裂",
+   "description": "非正常换行/段落断裂：一段在句中被截断为两段（常见于 TXT/PDF 转来）；或一行一段（每段平均字数 <20 而全书是长段落）",
+   "severity": "warning",
+   "fix_level": "suggest/llm",
+   "spec": [
+    "06 §4.1"
+   ],
+   "hint": "把被截断的两段合并成一段；不确定的逐条确认。"
+  },
+  "TYP-004": {
+   "priority": "P0",
+   "title": "混入的页眉/页脚/页码/重复行",
+   "description": "混入的页眉/页脚/页码/重复行：独占一段的 `^\\d{1,4}$`、`^第\\s*\\d+\\s*页$`、`^[-—–]\\s*\\d+\\s*[-—–]$`；在全书出现 ≥5 次且位置周期性的相同短段（书名/章名）",
+   "severity": "warning",
+   "fix_level": "suggest",
+   "spec": [
+    "06 §4.2"
+   ],
+   "hint": "删除混入的页眉、页脚、页码，并合并被它隔开的断段。"
+  },
+  "TYP-005": {
+   "priority": "P0",
+   "title": "垃圾与广告内容",
+   "description": "垃圾与广告内容：站点水印、二维码说明、“关注公众号”“更多好书”“本书来自”“下载地址”，推广链接，制作者署名，原站页脚",
+   "severity": "warning",
+   "fix_level": "suggest",
+   "spec": [
+    "06 §4.2"
+   ],
+   "hint": "删除广告、水印、推广段落；二维码图页请人工确认。"
+  },
+  "TYP-006": {
+   "priority": "P1",
+   "title": "伪标题",
+   "description": "伪标题：以 `p` 加粗/大字号/居中充当标题，缺少 `h*`；或标题文字与正文混在同一段",
+   "severity": "warning",
+   "fix_level": "llm",
+   "spec": [
+    "04 4.3.1.7",
+    "02 §9"
+   ],
+   "hint": "把充当标题的 p 改成 h*，层级按全书层级约定。"
+  },
+  "TYP-007": {
+   "priority": "P1",
+   "title": "标题序号",
+   "description": "标题序号：同级标题中的序号连续（第一章、第二章…；1、2、3），不重复不缺漏；同一层级的序号写法一致，逐级对应不混用（`一、`→`（一）`→`1.`，04 4.3.7.2）。章号与章名之间的空格见 TYP-024",
+   "severity": "warning",
+   "fix_level": "manual",
+   "spec": [
+    "04 4.3.2.3",
+    "04 4.3.7.2"
+   ],
+   "hint": "检查章号是否连续，同层级的序号写法是否一致；缺漏只报告。"
+  },
+  "TYP-008": {
+   "priority": "P1",
+   "title": "图与图注",
+   "description": "图与图注：图注与图为一体（`figure`）；图注位置一致（全书都在图下或表上）；有图注的图不被分页隔开；无图注的图与上下文间距合理；图号与图题之间一个空格，全书统一为占多数的写法（04 4.11.3.4）；没有图注的图不补造图注（04 4.11.3.8）",
+   "severity": "warning",
+   "fix_level": "suggest",
+   "spec": [
+    "04 4.11.3"
+   ],
+   "hint": "图和图注包进 figure，图注全书放同一侧；没有图注的图不要补造。"
+  },
+  "TYP-009": {
+   "priority": "P1",
+   "title": "图/表把一个段落劈成两段",
+   "description": "图/表把一个段落劈成两段：段落前半无句末标点 + 图/表 + 后半续句；被打断后接上文的续句写 `<p class=\"noindent\">`，不缩进（04 4.5.1.5，源自 se lint s-081 的意图）",
+   "severity": "warning",
+   "fix_level": "suggest/llm",
+   "spec": [
+    "04 4.5.1.5"
+   ],
+   "hint": "把图或表移到段落末尾，或合并被它劈开的段落。"
+  },
+  "TYP-010": {
+   "priority": "P1",
+   "title": "首章/章首版式",
+   "description": "首章/章首版式：章首第一段上方留白一致（建议 ≥ 标题留白）；篇章页标题居首、与页顶有留白",
+   "severity": "info",
+   "fix_level": "auto",
+   "spec": [
+    "03 §6.2",
+    "04 4.3.6"
+   ],
+   "hint": "在章首类上写统一的 margin-top。"
+  },
+  "TYP-011": {
+   "priority": "P1",
+   "title": "特殊块版式",
+   "description": "特殊块版式：诗歌（行短、行数多、等长）、引文（缩进+引号包围的长段）、书信（称呼+祝颂+落款）、日记日期",
+   "severity": "info",
+   "fix_level": "llm",
+   "spec": [
+    "04 4.6–4.8"
+   ],
+   "hint": "套用 04 对应小节的诗歌、引文、书信结构。"
+  },
+  "TYP-012": {
+   "priority": "P1",
+   "title": "首字下沉",
+   "description": "首字下沉：默认关闭，用户启用才输出（04 4.5.3.1）；只用于章首标题后的第一个正文段，段长不少于 40 字；首字不是数字或西文字母，首字符是开引号时连引号一起下沉；下沉段加 `noindent`，一个 `section` 至多一个",
+   "severity": "info",
+   "fix_level": "auto",
+   "spec": [
+    "04 4.5.3"
+   ],
+   "hint": "只在启用首字下沉且段长够时输出 span.dropcap，否则去掉。"
+  },
+  "TYP-013": {
+   "priority": "P1",
+   "title": "表格过大",
+   "description": "表格过大：列数 >6 或估算宽度超屏（总字符宽）；超长表格（>2 屏）",
+   "severity": "warning",
+   "fix_level": "suggest",
+   "spec": [
+    "04 4.13.2.3–4.13.2.5"
+   ],
+   "hint": "大表先加 compact 类；仍放不下就建议转置或拆表。"
+  },
+  "TYP-014": {
+   "priority": "P1",
+   "title": "前后部分页的处理",
+   "description": "前后部分页的处理：折页/扉页/广告页、版权页（宜按固定模板重做）、人工目录页（有 nav 后可删）",
+   "severity": "info",
+   "fix_level": "suggest",
+   "spec": [
+    "04 4.14"
+   ],
+   "hint": "版权页套 section.copyright 结构、文字原样保留；其余页提示删除。"
+  },
+  "TYP-015": {
+   "priority": "P1",
+   "title": "样式滥用",
+   "description": "样式滥用：词样式用在诗上、标题样式用在正文；同类块样式不一致（全书同样的诗歌块有 3 种类）",
+   "severity": "info",
+   "fix_level": "llm",
+   "spec": [
+    "04 4.1.1.1"
+   ],
+   "hint": "同类块统一使用同一个模板类。"
+  },
+  "TYP-016": {
+   "priority": "P1",
+   "title": "场景分隔符",
+   "description": "场景分隔符：`***`、`* * *`、`——`、`◇◇◇`、线条图、连续空段等，统一成 `<hr/>` 或 `p.sep`，全书二选一：原书用线条或 `hr` 的用 `hr`，用文字符号的用 `p.sep`，文字统一为 `＊　＊　＊`（04 4.5.2）",
+   "severity": "info",
+   "fix_level": "auto",
+   "spec": [
+    "04 4.5.2"
+   ],
+   "hint": "把各种场景分隔统一成 hr 或 p.sep（全书二选一）。"
+  },
+  "TYP-017": {
+   "priority": "P2",
+   "title": "漏刷样式",
+   "description": "漏刷样式：没有 class 的 `p` 占比异常；孤立未格式化块（相邻都有类，唯独此块无）",
+   "severity": "info",
+   "fix_level": "suggest",
+   "spec": [
+    "04 4.1.1.1"
+   ],
+   "hint": "给漏刷样式的块补上与相邻块一致的类。"
+  },
+  "TYP-018": {
+   "priority": "P2",
+   "title": "对话/问答体",
+   "description": "对话/问答体：说话人名后接冒号，统一加粗与分隔（全角冒号或空格）",
+   "severity": "info",
+   "fix_level": "llm",
+   "spec": [
+    "04 4.9.2"
+   ],
+   "hint": "对话体套 p.dialogue-run，角色名包 span.persona，冒号在 span 外。"
+  },
+  "TYP-019": {
+   "priority": "P2",
+   "title": "外文片段",
+   "description": "外文片段：中文书里的外文书名与片段用 `<span lang>` 标注，不靠斜体区分（04 4.1.3.5、4.1.3.7，源自 se lint s-024 的意图）；斜体只作强调",
+   "severity": "info",
+   "fix_level": "llm",
+   "spec": [
+    "04 4.1.3.5",
+    "04 4.1.3.7"
+   ],
+   "hint": "外文片段加 span lang，不用斜体表示外文；作品名可包 cite。"
+  },
+  "TYP-020": {
+   "priority": "P2",
+   "title": "版权页字段规范",
+   "description": "版权页字段规范：作者署名顺序、角色词（著/编/译）、ISBN、出版信息一致；多作者分隔符统一",
+   "severity": "info",
+   "fix_level": "llm",
+   "spec": [
+    "04 4.14.3.3"
+   ],
+   "hint": "版权页字段不一致时只报告，请用户核对。"
+  },
+  "TYP-021": {
+   "priority": "P2",
+   "title": "内容完整性（对照原书）",
+   "description": "内容完整性（对照原书）：缺章、缺图、缺注；需要源对照",
+   "severity": "info",
+   "fix_level": "manual",
+   "spec": [],
+   "hint": "缺章、缺图、缺注只能对照原书人工补。"
+  },
+  "TYP-022": {
+   "priority": "P1",
+   "title": "容器首尾的孤立场景分隔",
+   "description": "容器首尾的孤立场景分隔：`section` 的第一个或最后一个子元素是 `<hr/>` 或 `p.sep`，通常是转换遗留",
+   "severity": "warning",
+   "fix_level": "suggest",
+   "spec": [
+    "04 4.5.2.4"
+   ],
+   "hint": "章首或章末的场景分隔线没有意义，删掉。"
+  },
+  "TYP-023": {
+   "priority": "P2",
+   "title": "注释里「同上/同前/前引书/前揭书/同书/ibid.」等指代词，在弹出式注释下读",
+   "description": "注释里「同上/同前/前引书/前揭书/同书/ibid.」等指代词，在弹出式注释下读者看不到上一条",
+   "severity": "info",
+   "fix_level": "suggest",
+   "spec": [
+    "04 4.12.3.5"
+   ],
+   "hint": "这条注只写了「同上」，请补全具体出处。"
+  },
+  "TYP-024": {
+   "priority": "P0",
+   "title": "章号与章名之间恰有一个全角空格（U+3000）",
+   "description": "章号与章名之间恰有一个全角空格（U+3000）：不用半角空格、冒号、`·`，不留空；章号与章名整体写在同一个 `h*` 里",
+   "severity": "warning",
+   "fix_level": "auto",
+   "spec": [
+    "04 4.3.2.2",
+    "04 4.3.2.5",
+    "04 4.3.2.8"
+   ],
+   "hint": "章号和章名之间写一个全角空格，否则目录会粘成「第一章侯门庶子」。"
+  },
+  "RES-001": {
+   "priority": "P0",
+   "title": "封面存在且有语义",
+   "description": "封面存在且有语义：manifest 中恰有一个 `properties=\"cover-image\"` 的图片项；封面页 `epub:type=\"cover\"` 并列入 landmarks；`meta name=\"cover\"`（EPUB 2 兼容，可选）",
+   "severity": "error（无封面）；warning（无语义）",
+   "fix_level": "auto/suggest",
+   "spec": [
+    "04 4.14.1",
+    "01 §4.5",
+    "05 §2.2"
+   ],
+   "hint": "把首个整页图或文件名含 cover 的图标为封面，并生成带语义的封面页。"
+  },
+  "RES-002": {
+   "priority": "P0",
+   "title": "图片格式在核心媒体类型内",
+   "description": "图片格式在核心媒体类型内：`image/jpeg`、`image/png`、`image/gif`、`image/svg+xml`、`image/webp`（EPUB 3.3 核心媒体类型含 WebP；书中认为 WebP 不支持，已过时）；`bmp/tiff/avif/heic` 等非核心须有回退，建议转码",
+   "severity": "error（非核心且无回退）；info（WebP，是否转码由配置决定）",
+   "fix_level": "auto",
+   "spec": [
+    "05 §1.1",
+    "05 §1.2"
+   ],
+   "hint": "非核心格式转成 PNG 或 JPEG，并更新 manifest 与所有引用。"
+  },
+  "RES-003": {
+   "priority": "P0",
+   "title": "图片宽高不变形",
+   "description": "图片宽高不变形：`img` 同时写死 `width` 与 `height`（属性或 CSS）且比例与固有比例偏差 >1%；绝对像素宽度超过常见视口宽；`width` 用 px 导致大图溢出；图宽只用 `w-100/w-80/w-60` 类，不写 `width`/`height` 属性或内联像素宽（公式图的 `height:N.Nem` 除外，04 4.11.1.5–4.11.1.6）",
+   "severity": "warning",
+   "fix_level": "auto",
+   "spec": [
+    "04 4.11.1.5",
+    "05 §1.3"
+   ],
+   "hint": "去掉 width、height 属性，按需加 w-* 类，让图片保持原比例。"
+  },
+  "RES-004": {
+   "priority": "P1",
+   "title": "色彩模式",
+   "description": "色彩模式：JPEG 为 CMYK/灰度 ICC 异常，部分引擎无法显示；PNG 为调色板/16bit；应为 RGB（PNG 可 RGBA）",
+   "severity": "warning",
+   "fix_level": "auto",
+   "spec": [
+    "05 §1.3"
+   ],
+   "hint": "把图片转成 sRGB 模式。"
+  },
+  "RES-005": {
+   "priority": "P1",
+   "title": "体积",
+   "description": "体积：单图字节数 ≤ `img.max_bytes`（默认 warning 1MB / error 3MB）；整书 ≤ 600MB",
+   "severity": "warning/error",
+   "fix_level": "auto",
+   "spec": [
+    "05 §1.3"
+   ],
+   "hint": "压缩质量或缩小长边，让单图不超过体积上限；保留原图备份。"
+  },
+  "RES-006": {
+   "priority": "P1",
+   "title": "分辨率与像素",
+   "description": "分辨率与像素：长边不超过 `img.max_px_long_side`；插图像素过少（<300px 且被拉伸显示）；`dpi` 元数据（72/96）无意义，不检；总像素不超过 16 MP，防低端设备解码崩溃（源自 se lint f-018 的意图）",
+   "severity": "warning",
+   "fix_level": "auto/suggest",
+   "spec": [
+    "05 §1.3"
+   ],
+   "hint": "降采样到长边与总像素上限以内；低清图请换源。"
+  },
+  "RES-007": {
+   "priority": "P1",
+   "title": "封面规格",
+   "description": "封面规格：宽高比 0.625–0.75（1:1.6~3:4）；长边 ≥1600px 且短边 ≥1000px，默认目标 1600×2560（与 `05_图片与字体资源.md` §2 一致；行业常见要求，非 EPUB 规范）【补】；无拉伸，四边无裁字",
+   "severity": "warning",
+   "fix_level": "suggest",
+   "spec": [
+    "05 §2.1"
+   ],
+   "hint": "调整封面比例与尺寸；裁字的封面请人工处理。"
+  },
+  "RES-008": {
+   "priority": "P1",
+   "title": "动图与透明",
+   "description": "动图与透明：动态 GIF（多帧）在多数阅读系统只显示首帧或不显示；PNG 行内小图（如表情）需保持透明",
+   "severity": "info",
+   "fix_level": "suggest",
+   "spec": [
+    "05 §1.2"
+   ],
+   "hint": "动图转成静态首帧；需要透明的小图保持透明。"
+  },
+  "RES-009": {
+   "priority": "P1",
+   "title": "字体文件",
+   "description": "字体文件：`@font-face` 引用的字体在包内；格式为核心字体类型 TrueType/OpenType（`font/ttf`、`font/otf`）、`font/woff`、`font/woff2`；字体已嵌入的须有授权（无法自动判定，info）；字体 name 表 `OS/2.fsType` 禁止嵌入则报警",
+   "severity": "warning",
+   "fix_level": "suggest",
+   "spec": [
+    "05 §4.2",
+    "05 §4.6",
+    "03 §8.3"
+   ],
+   "hint": "补回缺失的字体文件或删掉 @font-face；格式转成 WOFF2。"
+  },
+  "RES-010": {
+   "priority": "P1",
+   "title": "字体子集化",
+   "description": "字体子集化：整本字体 >2MB 而正文仅用其中数千字；建议按全书字符集子集化（保留生僻字）",
+   "severity": "info",
+   "fix_level": "suggest",
+   "spec": [
+    "05 §4.3",
+    "05 §4.4"
+   ],
+   "hint": "按全书字符集子集化字体，输出 WOFF2。"
+  },
+  "RES-011": {
+   "priority": "P1",
+   "title": "字形覆盖",
+   "description": "字形覆盖：文字含 PUA（`U+E000–F8FF`、`U+F0000+`）、`□`、`〓` 占位符，或扩展 B 区及以后（`U+20000+`）而无字体/图片支持，将显示豆腐块。生僻字按 04 4.16.1 的顺序处理（通行字替换 → 子集字体回落 → 图片字 → IDS 描述）；PUA 与占位符不猜测替换，只报告并列出上下文",
+   "severity": "warning",
+   "fix_level": "suggest/manual",
+   "spec": [
+    "04 4.16.1",
+    "05 §3"
+   ],
+   "hint": "嵌入含该字的子集字体；PUA 与占位符只报告，等人工补字。"
+  },
+  "RES-012": {
+   "priority": "P2",
+   "title": "图片字规格",
+   "description": "图片字规格：`img.glyph`，高度 1em，`alt` 是该字本身（无 Unicode 码位时写 IDS 描述）；文件名含码点（小写十六进制，如 `rare-2ee26.png`），无码点时用 `rare-<内容哈希前 8 位>`；优先 `fill=\"currentColor\"` 的 SVG，用透明 PNG 时处理夜间模式（04 4.16.1.4–4.16.1.6）",
+   "severity": "info",
+   "fix_level": "auto/suggest",
+   "spec": [
+    "04 4.16.1.4–4.16.1.6",
+    "05 §3.2"
+   ],
+   "hint": "图片字写成 img.glyph，alt 填该字本身，文件名带码点。"
+  },
+  "RES-013": {
+   "priority": "P2",
+   "title": "SVG",
+   "description": "SVG：无脚本、无外链资源；`viewBox` 存在；内嵌 `<image>` 引用存在；内容文档使用 SVG 时 manifest 有 `svg` 属性",
+   "severity": "warning",
+   "fix_level": "suggest",
+   "spec": [
+    "05 §1.6"
+   ],
+   "hint": "删除 SVG 里的脚本与外链，补 viewBox。"
+  },
+  "RES-014": {
+   "priority": "P2",
+   "title": "远程资源",
+   "description": "远程资源：图片/字体/CSS 指向 `http(s)`（音视频/字体除外规范允许特定远程）；离线阅读失败",
+   "severity": "warning",
+   "fix_level": "suggest",
+   "spec": [
+    "01 §9",
+    "03 §2"
+   ],
+   "hint": "把远程资源下载并内嵌；下载不了就删除。"
+  },
+  "RES-015": {
+   "priority": "P2",
+   "title": "装饰图与重复图",
+   "description": "装饰图与重复图：多章重复出现的小图（章首装饰线）；同一内容多份文件（字节哈希相同）",
+   "severity": "info",
+   "fix_level": "auto/suggest",
+   "spec": [],
+   "hint": "合并字节相同的重复图片；装饰图改用 CSS 或删除。"
+  },
+  "RES-016": {
+   "priority": "P2",
+   "title": "含字图片",
+   "description": "含字图片：正文插图上有文字（表格图、扫描页）；对此类图需提供文本替代",
+   "severity": "info",
+   "fix_level": "llm",
+   "spec": [
+    "05 §1.5",
+    "04 4.11.2"
+   ],
+   "hint": "为含字图片生成 alt，或在图下追加文字转写，须用户确认。"
+  },
+  "RES-017": {
+   "priority": "P2",
+   "title": "清晰度",
+   "description": "清晰度：模糊/锯齿/大面积白边",
+   "severity": "info",
+   "fix_level": "suggest",
+   "spec": [
+    "05 §1.4"
+   ],
+   "hint": "裁掉大面积白边；模糊的图请换源。"
+  },
+  "RES-018": {
+   "priority": "P2",
+   "title": "无透明通道的照片类 PNG 建议转 JPEG 以减小体积",
+   "description": "无透明通道的照片类 PNG 建议转 JPEG 以减小体积；线稿、文字截图例外",
+   "severity": "info",
+   "fix_level": "suggest",
+   "spec": [
+    "05 §1.2"
+   ],
+   "hint": "这张是照片却存成了 PNG，转成 JPEG 可以明显减小体积。"
+  },
+  "RES-019": {
+   "priority": "P1",
+   "title": "封面页写法",
+   "description": "封面页写法：封面页是 spine 第一项；`body` 里只有一个 `section[epub:type=cover][class=cover]`；用 SVG 整页图（`viewBox`=图片像素宽高，`preserveAspectRatio=\"xMidYMid meet\"`，`role=\"img\"`，`aria-label=\"封面：《书名》\"`）或 `img[role=doc-cover][alt=\"封面：《书名》\"]`；含内联 SVG 的封面文件在 manifest 带 `svg` 属性；不用 `body` 背景图；全书只有一个封面页",
+   "severity": "warning",
+   "fix_level": "auto/suggest",
+   "spec": [
+    "04 4.14.1",
+    "01 §4.5",
+    "05 §2.2"
+   ],
+   "hint": "封面页放在 spine 第一项，用整页 svg，或带「封面：《书名》」alt 的 img。"
+  },
+  "RES-020": {
+   "priority": "P2",
+   "title": "音视频",
+   "description": "音视频：`audio`/`video` 带 `controls`，不用 `autoplay`，`preload=\"none\"`；视频带 `poster`、`width`、`height`；子元素放回退内容 `p.media-fallback`；文件在本书内并以正确 media-type 登记，核心类型之外须有回退；「扫码收听」文字与二维码图原样保留并标出",
+   "severity": "warning",
+   "fix_level": "suggest",
+   "spec": [
+    "04 4.18.1"
+   ],
+   "hint": "音视频要有控制条、不自动播放，并写明阅读器不支持时的回退说明。"
+  },
+  "TXT-001": {
+   "priority": "P0",
+   "title": "乱码与不可见字符",
+   "description": "乱码与不可见字符：`U+FFFD`、C0/C1 控制字符（除 `\\t\\n\\r`）、BOM `U+FEFF`（正文中）、零宽字符 `U+200B-200D U+2060`（非必要处）、GBK/UTF-8 误解码特征（`锟斤拷`、`烫烫`、`Ã.`、`æ.`、`ï¿½`）、孤立代理项；软连字符 `U+00AD`（源自 se lint t-058 的意图）",
+   "severity": "error（U+FFFD、控制字符、误解码）；warning（零宽）",
+   "fix_level": "auto/manual",
+   "spec": [
+    "06 SPC-01",
+    "06 SPC-02",
+    "06 PAR-06"
+   ],
+   "hint": "删除乱码与不可见字符；疑似误解码的请确认后回转。"
+  },
+  "TXT-002": {
+   "priority": "P0",
+   "title": "空白规范",
+   "description": "空白规范：连续空格/全角空格、段首尾空白、`\\u00a0` 滥用（仅用于不换行场景）、`\\t`、行尾空白、中文字间空格（OCR 遗留 `我 们`）",
+   "severity": "warning",
+   "fix_level": "auto",
+   "spec": [
+    "06 SPC-03–SPC-07"
+   ],
+   "hint": "折叠连续空白，删除段首尾空白和汉字之间的空格。"
+  },
+  "TXT-003": {
+   "priority": "P0",
+   "title": "中文旁的半角标点",
+   "description": "中文旁的半角标点：汉字与 `, . ; : ! ? ( )` 相邻；半角引号 `\"` `'` 夹汉字；`...` 用作省略号；`~` 用作波浪线；`--` 或 `－－` 用作破折号；适用范围含 OPF 的 `dc:title`/`dc:description` 与 `alt`、`title`、`aria-label` 属性值（源自 se lint m-012、m-014、t-025 的意图）",
+   "severity": "warning",
+   "fix_level": "auto/suggest",
+   "spec": [
+    "06 PUN-01–PUN-05"
+   ],
+   "hint": "把汉字旁的半角标点改成全角；英文句子内保持不动。"
+  },
+  "TXT-004": {
+   "priority": "P1",
+   "title": "成对标点配对",
+   "description": "成对标点配对：`“”‘’（）《》【】「」『』` 在段内与全文均配对；引号嵌套层级正确（外层 `“”` 内层 `‘’`，或港台 `「」『』`），跨段引文允许连续段首重复左引号；引号方向颠倒（`”…“`）与直引号混用也报告（源自 se lint t-028 的意图）",
+   "severity": "warning",
+   "fix_level": "suggest",
+   "spec": [
+    "06 QUO-01",
+    "06 PUN-06",
+    "06 PUN-07"
+   ],
+   "hint": "补上缺失的另一半引号或括号；无法确定时请人工处理。"
+  },
+  "TXT-005": {
+   "priority": "P1",
+   "title": "破折号/省略号/连接号/间隔号",
+   "description": "破折号/省略号/连接号/间隔号：破折号为 `——`（两个 `U+2014`，不是 `─ ━ — ––`）；省略号 `……`（两个 `U+2026`）；间隔号 `·`（`U+00B7`）而非 `•`、`・`、`‧`；波浪线 `～`；单位范围 `~`/`—` 视语境；破折号恰为两个 `U+2014`，连续三个及以上报告（源自 se lint t-014 的意图）",
+   "severity": "warning",
+   "fix_level": "auto/suggest",
+   "spec": [
+    "06 PUN-08–PUN-12"
+   ],
+   "hint": "统一破折号、省略号、间隔号的码点。"
+  },
+  "TXT-006": {
+   "priority": "P1",
+   "title": "中英/中数混排",
+   "description": "中英/中数混排：汉字与西文、数字间空格风格统一（有 or 无，按 `punct.profile`）；数字字母用半角；全角数字字母 `０-９Ａ-Ｚ` 成串转半角（单个可留）；西文标点后的空格",
+   "severity": "warning",
+   "fix_level": "auto",
+   "spec": [
+    "06 SPC-08",
+    "06 CHR-01"
+   ],
+   "hint": "统一中英、中数之间的空格风格；成串的全角英数转半角。"
+  },
+  "TXT-007": {
+   "priority": "P1",
+   "title": "标点重复与位置",
+   "description": "标点重复与位置：`，，` `。。` `？！`之外的叠加；左括号/引号在段尾，右括号/句号在段首；标点前多余空格",
+   "severity": "warning",
+   "fix_level": "auto/suggest",
+   "spec": [
+    "06 PUN-04",
+    "06 PUN-05"
+   ],
+   "hint": "删除重复标点和标点前的多余空格；段首尾的错位标点先确认是否断段。"
+  },
+  "TXT-008": {
+   "priority": "P1",
+   "title": "Unicode 规范化",
+   "description": "Unicode 规范化：NFC；康熙部首 `U+2F00–U+2FDF` 与 CJK 部首补充 `U+2E80–U+2EFF`（常为 OCR/复制误入）；兼容表意文字 `U+F900–U+FAFF`（多为字形误用）；全角空格规范；易混字符对照：`º ° ˚`、`〇 ○ 0 O`、`一 — ― ─`、`· • ・ ‧`，仅数字紧邻的度数符号 auto（源自 se lint t-056 的意图）",
+   "severity": "warning",
+   "fix_level": "auto/suggest",
+   "spec": [
+    "06 CHR-02–CHR-05"
+   ],
+   "hint": "做 NFC 规范化，把康熙部首与兼容字符换成统一汉字。"
+  },
+  "TXT-009": {
+   "priority": "P1",
+   "title": "繁简/异体混用",
+   "description": "繁简/异体混用：同一书内简体与繁体字形混杂（引用古籍除外）",
+   "severity": "warning",
+   "fix_level": "llm/suggest",
+   "spec": [
+    "06 CHR-06"
+   ],
+   "hint": "按目标字形统一繁简；引文和专名由用户确认是否保留。"
+  },
+  "TXT-010": {
+   "priority": "P1",
+   "title": "错别字与形近字",
+   "description": "错别字与形近字：`的/地/得`、`己/已/巳`、`未/末`、`日/曰`；OCR 遗留；人名译名前后不一致",
+   "severity": "info",
+   "fix_level": "llm",
+   "spec": [],
+   "hint": "逐条确认大模型给出的「原文→建议」改字补丁。"
+  },
+  "TXT-011": {
+   "priority": "P1",
+   "title": "数字与单位",
+   "description": "数字与单位：千分位、小数点、百分号、日期、范围符号（`1-5` 还是 `1～5`）；数字旁全半角一致；中文数字与阿拉伯数字风格依文类；时间写法 `8:30`、`8.30`、`8：30` 统一（源自 se lint t-010 的意图）",
+   "severity": "info",
+   "fix_level": "suggest",
+   "spec": [
+    "06 NUM-01–NUM-03",
+    "06 CHR-07"
+   ],
+   "hint": "统一数字、单位、范围符号的写法；科技书的半角千分位可豁免。"
+  },
+  "TXT-012": {
+   "priority": "P2",
+   "title": "英文/西文段落排版",
+   "description": "英文/西文段落排版：标点半角、标点后空格、`–`/`—`、弯引号 vs 直引号一致、连字符断行遗留（`inter-\\nnational`）",
+   "severity": "warning",
+   "fix_level": "auto/suggest",
+   "spec": [],
+   "hint": "补西文标点后的空格；合并断行连字符。"
+  },
+  "TXT-013": {
+   "priority": "P2",
+   "title": "书名号/引号用法",
+   "description": "书名号/引号用法：括号嵌套、引号内引号、书名号内层 `〈〉`；中文书中英文标题的处理",
+   "severity": "info",
+   "fix_level": "llm",
+   "spec": [
+    "06 PUN-06",
+    "06 PUN-07"
+   ],
+   "hint": "核对书名号和引号的嵌套层级。"
+  },
+  "TXT-014": {
+   "priority": "P2",
+   "title": "全书术语/人名/译名一致性（同一人名多种译写）",
+   "description": "全书术语/人名/译名一致性（同一人名多种译写）",
+   "severity": "info",
+   "fix_level": "llm",
+   "spec": [],
+   "hint": "在聚类结果里选定标准写法后批量替换。"
+  },
+  "TXT-015": {
+   "priority": "P1",
+   "title": "段末缺标点",
+   "description": "段末缺标点：非标题、列表、题注、诗行的 `p`，末字符是汉字、字母或数字而无句末标点，提示疑似断段或漏字；引号内整句话末尾无句末标点同样提示",
+   "severity": "warning",
+   "fix_level": "suggest",
+   "spec": [
+    "06 §4.1"
+   ],
+   "hint": "这一段结尾没有标点，可能被截断或漏了字，请核对原文。"
+  },
+  "TXT-016": {
+   "priority": "P1",
+   "title": "引号括号内侧空白",
+   "description": "引号括号内侧空白：开引号、开括号之后，闭引号、闭括号之前不得有空白",
+   "severity": "warning",
+   "fix_level": "auto",
+   "spec": [
+    "06 SPC-05"
+   ],
+   "hint": "删掉引号或括号里面紧贴着的空格。"
+  },
+  "TXT-017": {
+   "priority": "P0",
+   "title": "字符实体规范化",
+   "description": "字符实体规范化：除 `&amp; &lt; &gt; &quot;` 外，数字实体（`&#160;`、`&#12288;`、`&#x4e00;`）与命名实体一律还原为 UTF-8 字符。SEM-001 管解析层面，本规则管序列化输出与源文本里残留的写法",
+   "severity": "warning",
+   "fix_level": "auto",
+   "spec": [
+    "02 §1.2",
+    "06 §1.1"
+   ],
+   "hint": "把 &#160; 这类实体直接换成对应的字符。"
+  },
+  "TXT-018": {
+   "priority": "P2",
+   "title": "引号与句末标点的相对位置全书一致（大陆标准",
+   "description": "引号与句末标点的相对位置全书一致（大陆标准：引语独立成句则标点在引号内，否则在外）；先统计倾向，再报少数派",
+   "severity": "info",
+   "fix_level": "suggest",
+   "spec": [
+    "06 §2.7"
+   ],
+   "hint": "引号和句号的先后位置全书要一致，请核对这几处。"
+  },
+  "TXT-019": {
+   "priority": "P2",
+   "title": "强调、加粗、书名标签的边界不吞句末标点或相邻标点",
+   "description": "强调、加粗、书名标签的边界不吞句末标点或相邻标点；着重号不加在标点下方（整句强调除外）",
+   "severity": "info",
+   "fix_level": "suggest",
+   "spec": [
+    "03 §7.4"
+   ],
+   "hint": "把句末标点移到强调标签外面。"
+  },
+  "TXT-020": {
+   "priority": "P2",
+   "title": "重复字词",
+   "description": "重复字词：连续重复的虚词或助词（`的的`、`了了`、`是是`），排除叠词（人人、天天、常常）与 AABB 式",
+   "severity": "info",
+   "fix_level": "suggest",
+   "spec": [],
+   "hint": "这里有重复的字，可能是多打了一个。"
+  },
+  "A11Y-001": {
+   "priority": "P0",
+   "title": "所有 img（及 SVG image）有 alt 属性",
+   "description": "所有 `img`（及 SVG `image`）有 `alt` 属性：有信息的图写描述，纯装饰图写 `alt=\"\"`，`alt` 不得是文件名或「图片」「image」。**缺 `alt` 时一律补 `alt=\"\"` 并标「待补描述」，不得把图注复制进 `alt`**（读屏会把同一句话念两遍，08 决策 D8；04 4.11.2.5）",
+   "severity": "error（无 `alt` 属性）；warning（`alt` 为文件名或占位词）；info（内容性插图的 `alt=\"\"` 待补描述）",
+   "fix_level": "auto/llm",
+   "spec": [
+    "04 4.11.2.1",
+    "04 4.11.2.5–4.11.2.7",
+    "05 §1.5"
+   ],
+   "hint": "缺 alt 的图先补 alt=\"\" 并标「待补描述」，描述交大模型生成、用户确认；不要复制图注。"
+  },
+  "A11Y-002": {
+   "priority": "P0",
+   "title": "语言声明",
+   "description": "语言声明：`dc:language` 存在且合法；每个内容文档根上 `lang` 与 `xml:lang`；段内他语种片段用 `lang` 标注；`lang`/`xml:lang` 的值本身须是合法 BCP 47 且大小写规范（`zh-Hans`、`zh-CN`；未知语言写 `und`，不写 `unk`；源自 se lint s-051、s-090、s-094、x-016 的意图）；新生成时简体写 `zh-Hans`、繁体写 `zh-Hant`（04 4.1.3.2）；整个标题是外文时 `lang` 写在 `h*` 上（04 4.1.3.4）；中文书里的拼音片段用 `zh-Latn-pinyin`（源自 se lint s-082 的意图）",
+   "severity": "error（OPF 缺语言）；warning（文档缺 lang/与 OPF 不一致）",
+   "fix_level": "auto",
+   "spec": [
+    "04 4.1.3",
+    "02 §8.2"
+   ],
+   "hint": "补全 html 的 lang 与 xml:lang，值与 dc:language 一致；外语片段加 span lang。"
+  },
+  "A11Y-003": {
+   "priority": "P0",
+   "title": "无障碍元数据（OPF）",
+   "description": "无障碍元数据（OPF）：`schema:accessMode`（`textual`、`visual`…）、`schema:accessModeSufficient`（如 `textual`）、`schema:accessibilityFeature`（如 `tableOfContents`、`readingOrder`、`alternativeText`、`structuralNavigation`、`none`）、`schema:accessibilityHazard`（`none` 或具体危害 `flashing`/`motionSimulation`/`sound`，无法确认写 `unknown`）、`schema:accessibilitySummary`；声明符合性 `dcterms:conformsTo`（值如 `EPUB Accessibility 1.1 - WCAG 2.1 Level AA`）仅当确实达标才写；与正文双向一致：有图才声明 `accessMode` 含 `visual` 与 `alternativeText`，无图则不声明；有 MathML 要求 `MathML` 与 `describedMath`（源自 se lint m-028、m-029、m-038、m-077 的意图）",
+   "severity": "warning（缺项）；info（未声明符合性）",
+   "fix_level": "auto/manual",
+   "spec": [
+    "01 §7"
+   ],
+   "hint": "按检测到的特性写无障碍元数据；没有依据不得声明符合性。"
+  },
+  "A11Y-004": {
+   "priority": "P1",
+   "title": "导航完整",
+   "description": "导航完整：nav toc 覆盖所有章节；`landmarks` 存在；有印刷页码来源时提供 `page-list`（`nav[@epub:type='page-list']`）并在正文放 `<span epub:type=\"pagebreak\" role=\"doc-pagebreak\" id=\"p12\" aria-label=\"12\"/>`，且 `dc:source` 给出印刷版 ISBN",
+   "severity": "warning",
+   "fix_level": "auto/suggest",
+   "spec": [
+    "01 §6.4",
+    "02 §8.1"
+   ],
+   "hint": "有印刷页码来源时补 page-list 与页码标记；没有来源就不要生成。"
+  },
+  "A11Y-005": {
+   "priority": "P1",
+   "title": "标题结构可用",
+   "description": "标题结构可用：每个内容文档有标题块（`h1` 只用于书名页，其余从 `h2` 起，04 4.3.1.1）、不跳级（SEM-006）；用 `h*` 而非样式模拟（TYP-006）",
+   "severity": "warning",
+   "fix_level": "auto/llm",
+   "spec": [
+    "04 4.3.1",
+    "02 §4.1"
+   ],
+   "hint": "补标题块、修正跳级；用 h* 而不是样式模拟标题。"
+  },
+  "A11Y-006": {
+   "priority": "P1",
+   "title": "表格可访问",
+   "description": "表格可访问：`th`+`scope`；复杂表 `headers`；`caption`；不以图片替代表格（若图片则 alt 给摘要+数据表链接）；空 `th` 改 `td`，`thead` 内的单元格用 `th`（源自 se lint s-074、s-108 的意图）",
+   "severity": "warning",
+   "fix_level": "suggest",
+   "spec": [
+    "04 4.13.1.2",
+    "04 4.13.1.5",
+    "02 §5.6"
+   ],
+   "hint": "表头用 th 并写 scope，补 caption；空 th 改 td。"
+  },
+  "A11Y-007": {
+   "priority": "P1",
+   "title": "链接文字有意义",
+   "description": "链接文字有意义：非“点击这里/这里/链接/click here”；同页链接文字相同且目标不同则歧义",
+   "severity": "warning",
+   "fix_level": "llm",
+   "spec": [],
+   "hint": "按上下文改写含糊的链接文字。"
+  },
+  "A11Y-008": {
+   "priority": "P1",
+   "title": "不仅依赖颜色/位置传达信息",
+   "description": "不仅依赖颜色/位置传达信息；文本对比度达标（见 STY-016）",
+   "severity": "warning",
+   "fix_level": "suggest/llm",
+   "spec": [
+    "03 §9"
+   ],
+   "hint": "不只靠颜色传达信息，补文字说明或符号。"
+  },
+  "A11Y-009": {
+   "priority": "P1",
+   "title": "阅读顺序",
+   "description": "阅读顺序：DOM 顺序即阅读顺序（不依赖 `float/order/position` 改序）；spine 顺序=目录顺序",
+   "severity": "warning",
+   "fix_level": "suggest",
+   "spec": [
+    "03 §10",
+    "01 §5.4"
+   ],
+   "hint": "调整 DOM 顺序，使它与阅读顺序一致。"
+  },
+  "A11Y-010": {
+   "priority": "P2",
+   "title": "DPUB-ARIA 角色",
+   "description": "DPUB-ARIA 角色：章 `role=\"doc-chapter\"`、前言 `doc-preface`、注释引用 `doc-noteref`、回链 `doc-backlink`、目录 `doc-toc`、页码 `doc-pagebreak`、尾注 `doc-endnotes`；与 `epub:type` 保持一致；注释 `li` 不写 `doc-endnote`（已弃用，04 4.1.4.7）；`epub:type` 有对应的 `doc-*` 时两者同写（04 4.1.4.5）",
+   "severity": "info",
+   "fix_level": "auto",
+   "spec": [
+    "04 4.1.4.5",
+    "02 §6"
+   ],
+   "hint": "按 epub:type 与 role 的映射表成对写入 DPUB-ARIA role。"
+  },
+  "A11Y-011": {
+   "priority": "P2",
+   "title": "复杂图的长描述",
+   "description": "复杂图的长描述：`figure` 内图表/示意图用 `aria-describedby` 指向描述节点，或 `<details>` 提供文字说明；数学公式用 MathML 并有 `alttext`",
+   "severity": "info",
+   "fix_level": "llm",
+   "spec": [
+    "02 §5.5",
+    "05 §1.5"
+   ],
+   "hint": "为复杂图补长描述，公式改用 MathML 并写 alttext。"
+  },
+  "A11Y-012": {
+   "priority": "P2",
+   "title": "动态与闪烁",
+   "description": "动态与闪烁：无自动播放与 >3 次/秒闪烁；音视频有字幕/文字稿（本规范以流式文本为主）",
+   "severity": "info",
+   "fix_level": "manual",
+   "spec": [
+    "04 4.18.1"
+   ],
+   "hint": "报告自动播放与闪烁内容，请人工处理。"
+  },
+  "A11Y-013": {
+   "priority": "P2",
+   "title": "用户可调",
+   "description": "用户可调：不锁字号/行高/颜色/字体（见 STY-008、STY-017）；无仅 `px` 的固定尺寸",
+   "severity": "warning",
+   "fix_level": "auto",
+   "spec": [
+    "03 §1.1"
+   ],
+   "hint": "去掉锁死字号、行高、颜色的写法，让用户设置能覆盖。"
+  },
+  "A11Y-014": {
+   "priority": "P1",
+   "title": "alt 与同一 figure 内 figcaption 的文本逐字相同（读屏会念",
+   "description": "`alt` 与同一 `figure` 内 `figcaption` 的文本逐字相同（读屏会念两遍）",
+   "severity": "info",
+   "fix_level": "manual",
+   "spec": [
+    "04 4.11.2.2",
+    "04 4.11.2.8"
+   ],
+   "hint": "alt 和图注一字不差，请改写 alt，去描述画面本身。"
+  },
+  "A11Y-015": {
+   "priority": "P1",
+   "title": "alt 文字规范",
+   "description": "alt 文字规范：块级内容性插图的 `alt` 描述画面，写成完整句子，不写「图片」「插图」前缀，不描述图在书中的位置，以句末标点（。！？）结束；行内图（`glyph`、`formula`）不加句末标点；`alt`、`aria-label` 中不含 `U+00A0`、`U+2060`、`U+200B`",
+   "severity": "warning（含不可见字符）；info（其余）",
+   "fix_level": "auto/suggest",
+   "spec": [
+    "04 4.11.2.2–4.11.2.4",
+    "04 4.11.2.9",
+    "05 §1.5"
+   ],
+   "hint": "alt 写成一句完整的话，句末加标点；行内小图不加。"
+  }
+ }
+}

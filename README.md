@@ -37,14 +37,18 @@ docker compose -f compose.dev.yml run --rm dev pytest
 docker compose -f compose.dev.yml run --rm dev epubcheck book.epub
 ```
 
-命令行（M0，供测试与批量验收；正式界面是网页）：
+命令行（供测试与批量验收；正式界面是网页）：
 
 ```sh
-docker compose -f compose.dev.yml run --rm dev python -m epub_typesetter audit book.epub
+docker compose -f compose.dev.yml run --rm dev python -m epub_typesetter check book.epub [--format json] [--hits all]
 docker compose -f compose.dev.yml run --rm dev python -m epub_typesetter fix book.epub -o out.epub --epubcheck
 ```
 
-`fix` 只应用确定性的 `auto` 级修复，输出修改记录、修复前后问题数、可见文字是否一致，以及（加 `--epubcheck` 时）epubcheck 错误数对比。
+`check` 的报告格式见 `guide/07` §6：每条问题 = 规则编号 + 问题 + 修改提示 + 规范条目 + 命中位置；退出码 0 = 无未豁免的 error，1 = 有，2 = 用法或豁免文件错误。`fix` 只应用确定性的 `auto` 级修复。
+
+**按书豁免**（`guide/07` §7）：在书旁放 `<书名>.epub.typeset-ignore.json`，按「规则 × 文件（可通配）× 选择器/文字锚点 × 必填理由」声明有意的例外；被豁免的问题显示为「已豁免」，修复时跳过。网页上点「忽略此问题…」即可生成。
+
+规则的说明、修改提示、规范条目只写在 `guide/07`，改完运行 `python3 scripts/build_rules_meta.py` 重新生成 `src/epub_typesetter/rules_meta.json`。
 
 ## 已确定的方向（2026-10-22）
 

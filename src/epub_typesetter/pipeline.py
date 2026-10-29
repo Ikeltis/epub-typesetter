@@ -17,10 +17,11 @@ class OptimizeReport:
     refix: engine.FixReport
 
 
-def optimize(book: Book, theme: str = 'default') -> OptimizeReport:
-    rep0 = engine.fix(book)
+def optimize(book: Book, theme: str = 'default', waivers=None) -> OptimizeReport:
+    """豁免只作用于两轮规范修复；重建本身整体重排，不逐处看豁免。"""
+    rep0 = engine.fix(book, waivers=waivers)
     an = analyze(book)
     rrep = rebuild(book, an, theme)
     book.flush()
-    rep1 = engine.fix(book)
+    rep1 = engine.fix(book, waivers=waivers)
     return OptimizeReport(rep0, an, rrep, rep1)

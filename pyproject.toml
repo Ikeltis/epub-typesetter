@@ -30,4 +30,4 @@ where = ["src"]
 testpaths = ["tests"]
 
 [tool.setuptools.package-data]
-epub_typesetter = ["themes/*.css"]
+epub_typesetter = ["themes/*.css", "rules_meta.json"]

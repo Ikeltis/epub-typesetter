@@ -168,6 +168,8 @@ def rename_file(book: Book, old: str, new: str) -> None:
     assert new not in book.files, new
     rewrite_references(book, lambda t, f: (new, f) if t == old else None)
     book.files[new] = book.files.pop(old)
+    book.origins[new] = book.history(old)
+    book.origins.pop(old, None)
     if old in book._trees:
         book._trees[new] = book._trees.pop(old)
     if old in book._dirty:

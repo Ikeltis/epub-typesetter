@@ -1,5 +1,10 @@
 async function request(method, url, body) {
-  const res = await fetch(url, { method, body })
+  const json = body && !(body instanceof FormData)
+  const res = await fetch(url, {
+    method,
+    body: json ? JSON.stringify(body) : body,
+    headers: json ? { 'Content-Type': 'application/json' } : undefined,
+  })
   if (!res.ok) {
     let detail = `${res.status}`
     try { detail = (await res.json()).detail || detail } catch { /* 非 JSON 响应 */ }
@@ -19,6 +24,8 @@ export const api = {
   },
   fix: (id, mode = 'basic') => request('POST', `/api/books/${id}/fix?mode=${mode}`),
   remove: (id) => request('DELETE', `/api/books/${id}`),
+  addWaiver: (id, waiver) => request('POST', `/api/books/${id}/waivers`, waiver),
+  removeWaiver: (id, wid) => request('DELETE', `/api/books/${id}/waivers/${wid}`),
   downloadUrl: (id, which = 'fixed') => `/api/books/${id}/download?which=${which}`,
 }
 

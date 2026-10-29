@@ -3,18 +3,19 @@ from __future__ import annotations
 
 import os
 import traceback
-from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 
-from .. import engine, epubcheck
+from .. import engine, epubcheck, report
 from ..book import NS, Book, EpubError
 from ..pipeline import optimize
 from ..rebuild import REMOVED_ROLES
 from ..textcheck import compare_blocks, compare_text
+from ..waivers import WaiverFileError, WaiverSet
 from . import store
 
 EPUBCHECK_LOCALE = os.environ.get('EPUBTS_EPUBCHECK_LOCALE', 'zh-TW')
 MAX_MESSAGES = 300
+BUSY = ('queued', 'auditing', 'fixing')
 _pool = ThreadPoolExecutor(max_workers=int(os.environ.get('EPUBTS_WORKERS', '2')))
 
 
@@ -53,25 +54,64 @@ def _epubcheck_report(msgs) -> dict:
             'messages': items[:MAX_MESSAGES]}
 
 
-def _issues_report(issues) -> dict:
-    by_rule = Counter((i.rule_id, i.severity) for i in issues)
-    return {'total': len(issues),
-            'by_severity': dict(Counter(i.severity for i in issues)),
-            'by_rule': [{'rule': r, 'severity': s, 'count': n} for (r, s), n in sorted(by_rule.items())],
-            'items': [i.to_dict() for i in issues]}
+MAX_HITS = 50       # 网页每条问题最多带的命中数（完整列表用命令行看）
+
+
+def load_waivers(pid: str, renames: bool = False) -> WaiverSet:
+    """读取本书的豁免；格式坏了不让整个页面报错，按「无豁免 + 一条 STR-024」处理。"""
+    try:
+        ws = WaiverSet.load(store.path(pid, 'waivers.json'))
+    except WaiverFileError as e:
+        ws = WaiverSet(problems=[('error', str(e), {})])
+    if renames:
+        ws.renames = store.read_json(pid, 'fixed.renames.json') or {}
+    return ws
+
+
+def _issues_report(issues, book=None, ws=None, skipped=None) -> dict:
+    rep = report.build(issues, book, ws, skipped=skipped)
+    for d in rep['issues']:
+        if len(d['hits']) > MAX_HITS:
+            d['hits_truncated'] = len(d['hits']) - MAX_HITS
+            d['hits'] = d['hits'][:MAX_HITS]
+    rep['total'] = sum(rep['summary'][k] for k in ('error', 'warning', 'info'))
+    return rep
+
+
+def _original_issues(pid: str, book: Book | None = None) -> dict:
+    """原书的问题报告。已有输出时，豁免多半是对着输出写的，原书上不报「未命中」。"""
+    book = book or Book.load(store.path(pid, 'original.epub'))
+    ws = load_waivers(pid)
+    issues = engine.audit(book, waivers=ws, self_check=not os.path.exists(store.path(pid, 'fixed.epub')))
+    return _issues_report(issues, book, ws)
 
 
 def audit(pid: str) -> None:
     store.update(pid, status='auditing', message='')
     book = Book.load(store.path(pid, 'original.epub'))
     info = _book_info(book)
-    issues = engine.audit(book)
     store.update(pid, title=info['title'], author=info['author'], version=info['version'])
+    issues = _original_issues(pid, book)
     msgs = epubcheck.run(store.path(pid, 'original.epub'), locale=EPUBCHECK_LOCALE)
-    store.write_json(pid, 'audit.json', {'book': info, 'issues': _issues_report(issues),
+    store.write_json(pid, 'audit.json', {'book': info, 'issues': issues,
                                          'parse_notes': [n.message for n in book.parse_notes][:50],
                                          'epubcheck': _epubcheck_report(msgs)})
     store.update(pid, status='ready')
+
+
+def rescore(pid: str) -> None:
+    """豁免变更后只重算本工具的问题报告（不重跑 epubcheck、不重新修复），几秒内完成。"""
+    a = store.read_json(pid, 'audit.json')
+    if a is not None:
+        a['issues'] = _original_issues(pid)
+        store.write_json(pid, 'audit.json', a)
+    f = store.read_json(pid, 'fix.json')
+    if f is not None and os.path.exists(store.path(pid, 'fixed.epub')):
+        book = Book.load(store.path(pid, 'fixed.epub'))
+        ws = load_waivers(pid, renames=True)
+        f['after'] = _issues_report(engine.audit(book, waivers=ws), book, ws)
+        f['waivers_changed'] = True          # 输出文件是按旧豁免修的，提示用户重新修复
+        store.write_json(pid, 'fix.json', f)
 
 
 ROLE_NAMES = {'h1': '一级标题', 'h2': '二级标题', 'h3': '三级标题', 'para': '正文段落', 'figure': '插图',
@@ -85,10 +125,12 @@ def fix(pid: str, mode: str = 'basic') -> None:
     store.update(pid, status='fixing', message='')
     original = open(store.path(pid, 'original.epub'), 'rb').read()
     book = Book.load(original)
+    ws = load_waivers(pid)
     result = {'mode': mode}
     if mode == 'rebuild':
-        orep = optimize(book)
-        rep = engine.FixReport(orep.fix.changes + orep.refix.changes, orep.fix.before, orep.refix.after)
+        orep = optimize(book, waivers=ws)
+        rep = engine.FixReport(orep.fix.changes + orep.refix.changes, orep.fix.before, orep.refix.after,
+                               orep.fix.skipped + orep.refix.skipped)
         out = book.to_bytes()
         bc = compare_blocks(orep.analysis.blocks, REMOVED_ROLES, Book.load(out))
         result['text'] = {'equal': bc.ok, 'length': bc.chars_before, 'summary': bc.summary(),
@@ -103,7 +145,7 @@ def fix(pid: str, mode: str = 'basic') -> None:
             'removed_total': len(orep.rebuild.removed),
         }
     else:
-        rep = engine.fix(book)
+        rep = engine.fix(book, waivers=ws)
         out = book.to_bytes()
         diff = compare_text(Book.load(original), Book.load(out))
         result['text'] = {'equal': diff.equal, 'length': diff.length, 'summary': diff.summary(),
@@ -113,11 +155,12 @@ def fix(pid: str, mode: str = 'basic') -> None:
     with open(tmp, 'wb') as f:
         f.write(out)
     os.replace(tmp, store.path(pid, 'fixed.epub'))
+    store.write_json(pid, 'fixed.renames.json', WaiverSet.renames_of(book))
     msgs = epubcheck.run(store.path(pid, 'fixed.epub'), locale=EPUBCHECK_LOCALE)
     result.update({
         'changes': [{'rule': r, 'text': t} for r, t in rep.changes],
-        'before': _issues_report(rep.before),
-        'after': _issues_report(rep.after),
+        'before': _issues_report(rep.before, None, ws),
+        'after': _issues_report(rep.after, book, ws, rep.skipped),
         'epubcheck': _epubcheck_report(msgs),
         'size': len(out),
     })

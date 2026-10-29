@@ -5,6 +5,8 @@
                    fixed.epub      修复结果
                    audit.json      体检报告
                    fix.json        修复报告
+                   waivers.json    按书豁免（guide/07 §7 格式）
+                   fixed.renames.json  修复时的改名链（原路径 → 输出路径），豁免据此匹配输出文件
 
 不使用用户提供的文件名作路径，id 由服务端生成。
 """

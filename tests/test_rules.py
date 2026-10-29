@@ -225,3 +225,15 @@ def test_layout_check_catches_squashed_paragraphs():
         title='二', body='<h1>二</h1>' + long_p.replace('<p>', '<p style="width: 0pt">') * 6)})
     assert compare_layout(good, good).ok
     assert not compare_layout(good, bad).ok
+
+
+def test_z3998_prefix_added_on_html_and_moved_from_body():
+    doc = ('<?xml version="1.0"?><!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" '
+           'xmlns:epub="http://www.idpf.org/2007/ops" lang="zh" xml:lang="zh"><head><title>二</title></head>'
+           '<body epub:prefix="foo: http://example.com/"><h1>二</h1>'
+           '<blockquote epub:type="z3998:poem"><p>诗</p></blockquote></body></html>')
+    b, _ = fixed(make_epub({'OEBPS/Text/c2.xhtml': doc}))
+    root = b.tree('OEBPS/Text/c2.xhtml').getroot()
+    pre = root.get('{http://www.idpf.org/2007/ops}prefix')
+    assert 'z3998: http://www.daisy.org/z3998/2012/vocab/structure/' in pre and 'foo: http://example.com/' in pre
+    assert root.find('{http://www.w3.org/1999/xhtml}body').get('{http://www.idpf.org/2007/ops}prefix') is None

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from xml.sax.saxutils import escape, quoteattr
 
 from .book import NS, Book
-from .xhtml import HEADINGS, X, body, text_of
+from .xhtml import HEADINGS, X, body, squash, text_of
 
 NCX = '{%s}' % NS['ncx']
 
@@ -39,7 +39,7 @@ def entries_from_ncx(book: Book) -> list[Entry]:
     def walk(parent, depth):
         for np_ in parent.findall(NCX + 'navPoint'):
             label_el = np_.find(f'{NCX}navLabel/{NCX}text')
-            label = ' '.join((label_el.text or '').split()) if label_el is not None else ''
+            label = squash(label_el.text or '') if label_el is not None else ''
             content = np_.find(NCX + 'content')
             src = content.get('src', '') if content is not None else ''
             if src:
@@ -63,7 +63,7 @@ def entries_from_headings(book: Book, max_level: int = 3) -> list[Entry]:
         root = book.tree(it.path).getroot()
         ids = {e.get('id') for e in root.iter() if isinstance(e.tag, str) and e.get('id')}
         for el in body(root).iter(*HEADINGS[:max_level]):
-            label = ' '.join(text_of(el).split())
+            label = squash(text_of(el))
             if not label:
                 continue
             first_in_doc = not any(e.depth for e in out if e.path == it.path)

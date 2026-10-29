@@ -1,4 +1,4 @@
-/* epub-typesetter 默认主题：guide/03 §11 推荐默认样式表 + guide/04 T16 注释模板。改规范请先改 guide。 */
+/* epub-typesetter 默认主题。由 scripts/build_theme.py 从 guide/03 §11 与 guide/04 生成，请勿手改。 */
 @charset "UTF-8";
 
 /* ===== 0. reset 与基线 ===== */
@@ -27,30 +27,30 @@ p.gap{ margin-top:1.5em; }                       /* [书] 空一行，替代 <p>
 .no-break{ white-space:nowrap; }
 .small{ font-size:.875em; }                      /* [书] 五号 */
 
-/* ===== 2. 标题（章首与节内区分；字号、margin 见 03 §6） ===== */
-h1, h2, h3, h4, h5, h6, .chapter-title, .part-title{
+/* ===== 2. 标题：样式按角色类，数字只表示层级（03 §6、04 §4.3） ===== */
+h1, h2, h3, h4, h5, h6{
   font-weight:normal; text-indent:0; text-align:left; line-height:1.4;
   page-break-after:avoid; break-after:avoid;
   page-break-inside:avoid; break-inside:avoid;
 }
-h1, .chapter-title{                              /* 章首：视觉下沉 */
-  margin:25% 0 1.5em; font-size:1.5em;           /* [书30% → 25%] */
-  font-family:"Source Han Sans SC","Noto Sans CJK SC","PingFang SC","Microsoft YaHei","SimHei",sans-serif;
-  text-wrap:balance;                             /* [补，需实测] */
-}
-.part-title{ margin:35% 0 1em; font-size:1.8em; text-align:center;
-  font-family:"Source Han Sans SC","Noto Sans CJK SC","PingFang SC","Microsoft YaHei","SimHei",sans-serif; }
-h2{ margin:2em 0 .8em;  font-size:1.3em;  text-wrap:balance;
-  font-family:"Source Han Sans SC","Noto Sans CJK SC","PingFang SC","Microsoft YaHei","SimHei",sans-serif; }
-h3{ margin:1.6em 0 .6em; font-size:1.15em;
-  font-family:"Source Han Sans SC","Noto Sans CJK SC","PingFang SC","Microsoft YaHei","SimHei",sans-serif; }
+h1, h2, h3{ font-family:"Source Han Sans SC","Noto Sans CJK SC","PingFang SC","Microsoft YaHei","SimHei",sans-serif; }
+/* 兜底：没有角色类的标题按数字大小有序 */
+h1{ margin:1.5em 0 1em; font-size:1.5em; }
+h2{ margin:1.6em 0 .7em; font-size:1.25em; }
+h3{ margin:1.4em 0 .6em; font-size:1.15em; }
 h4{ margin:1.3em 0 .4em; font-size:1.05em; font-weight:bold; }
 h5, h6{ margin:1em 0 .3em; font-size:1em; font-weight:bold; }
-h2.chapter-title{ margin:25% 0 1.5em; font-size:1.5em; }   /* h2 作章名时 */
-h1.align-center, h2.align-center, h3.align-center{ text-align:center; }
+/* 角色类（优先于兜底，与层级数字无关） */
+.part-title{ margin:35% 0 1em; font-size:1.8em; text-align:center; font-weight:normal; }
+.chapter-title{ margin:25% 0 1.5em; font-size:1.5em; font-weight:normal; text-wrap:balance; }   /* [书30% → 25%]；text-wrap 需实测 */
+.section-title{ margin:2em 0 .8em; font-size:1.3em; font-weight:normal; text-wrap:balance; }
+.subsection-title{ margin:1.6em 0 .6em; font-size:1.15em; font-weight:normal; }
+.part-title, .chapter-title, .section-title, .subsection-title{
+  font-family:"Source Han Sans SC","Noto Sans CJK SC","PingFang SC","Microsoft YaHei","SimHei",sans-serif; }
+.align-center.chapter-title, .align-center.section-title{ text-align:center; }
 p.subtitle{ margin:-.8em 0 1.5em; font-size:.9em; text-indent:0; text-align:left;
   font-family:"Kaiti SC","STKaiti","KaiTi",serif; }                   /* 副标题小于主标题 */
-.title-num, .title-name{ display:block; }        /* 两行标题（第N章 / 章名） */
+.title-num, .title-name{ display:block; }        /* 两行显示时；两 span 之间保留全角空格 */
 
 /* ===== 3. 引文 ===== */
 blockquote{ margin:.75em 0 .75em 2em; padding:0; }            /* [书] 左2em，上下.75em */
@@ -82,7 +82,9 @@ tr.odd{ background:rgba(127,127,127,.08); }      /* 斑马纹：显式 class，�
 
 /* ===== 7. 行内 ===== */
 em{ font-style:normal; font-family:"Kaiti SC","STKaiti","KaiTi",serif; }  /* 汉字无真斜体：楷体强调 */
-:lang(en) em, em:lang(en), i, cite{ font-style:italic; font-family:inherit; }  /* 西文保持斜体 */
+i, cite{ font-style:normal; }                    /* 中文没有真斜体：默认正体，避免书名被硬拉斜 */
+:lang(en) em, em:lang(en), :lang(en) i, i:lang(en), :lang(en) cite, cite:lang(en){
+  font-style:italic; font-family:inherit; }      /* 只有标了西文 lang 的才斜体；外文 i/cite 须带 lang */
 strong, b{ font-weight:bold; }
 .dot{ -webkit-text-emphasis:filled dot; -webkit-text-emphasis-position:under right;
   text-emphasis:filled dot; text-emphasis-position:under right; font-style:normal; font-family:inherit; }
@@ -112,19 +114,22 @@ aside.note-box p{ text-indent:0; }
 /* ===== 9. 分页保护 ===== */
 p.page-break, .page-break{ page-break-before:always; break-before:page; }   /* 极少用 */
 
-/* tpl:notes —— 书末尾注，做法同 Standard Ebooks（guide/04 T16） */
+/* tpl:notes */
 a.noteref{ font-size:.75em; line-height:0; vertical-align:super; font-style:normal; font-weight:normal;
-  text-decoration:none; padding:0 .1em; }                       /* 不用 <sup>：避免与 sup/small 叠加缩小 */
+	text-decoration:none; padding:0 .1em; }
 section.endnotes > ol{ margin:1em 0; padding-left:2.5em; }
 section.endnotes > ol > li{ margin:1em 0; font-size:.9em; line-height:1.6; }
 section.endnotes li p{ margin:.3em 0; text-indent:0; text-align:justify; }
+section.endnotes li blockquote{ margin:.5em 0 .5em 1em; }
 a.backlink{ text-decoration:none; padding:0 .2em; }
 
-/* ===== 10. 本工具重建时用到的增量类（guide/04） ===== */
+/* ===== 10. 本工具重建时用到的增量类 ===== */
 p.source{ margin:.2em 0 1em; font-size:.85em; line-height:1.5; text-indent:0; text-align:left; }  /* 图表资料来源 */
 p.meta{ margin:.3em 0; text-indent:0; text-align:left; }                                     /* 版权页键值行 */
 ul.bullets{ list-style-type:disc; }
-img.glyph{ height:1em; width:auto; vertical-align:-.1em; margin:0 .05em; }  /* 行内图片字、生僻字、版本标记（guide/04 T20） */
-/* 原书有语义的颜色（批语、强调）映射为 accent；guide/03 默认不写死颜色，这是唯一例外，并给夜间模式配色 */
+img.glyph{ height:1em; width:auto; vertical-align:-.1em; margin:0 .05em; }  /* 行内图片字、生僻字（04 §4.16） */
+section.cover-page{ margin:0; padding:0; text-align:center; text-indent:0; }
+section.cover-page img{ max-width:100%; max-height:100vh; }                  /* 04 §4.14；vh 需实测 */
+/* 原书有语义的颜色（批语、强调）映射为 accent；03 默认不写死颜色，这是唯一例外，并给夜间模式配色 */
 .accent{ color:#a8382b; }
 @media (prefers-color-scheme: dark){ .accent{ color:#e88b7d; } }

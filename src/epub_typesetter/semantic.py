@@ -13,6 +13,7 @@
   meta       版权页的「键：值」行      quote     引文
   right      右对齐短行（落款）        center    居中短行
   keep       表格、pre 等原样保留的块
+  note-cont  多段注的续段               heading-merged 已并入相邻标题的块（章号、章名各成标题时）
 """
 from __future__ import annotations
 
@@ -25,7 +26,7 @@ from lxml import etree
 
 from .book import NS, Book
 from .nav import entries_from_ncx
-from .xhtml import X, css_paths, is_external
+from .xhtml import X, css_paths, is_external, squash
 
 BLOCK_TAGS = {X + t for t in ('p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'li', 'dt', 'dd', 'div',
                               'figcaption', 'pre', 'table', 'figure', 'section', 'article', 'aside',
@@ -34,6 +35,8 @@ CONTAINERS = {X + t for t in ('div', 'section', 'article', 'blockquote', 'ul', '
                               'aside', 'nav')}
 ATOMIC = {X + t for t in ('table', 'pre', 'figure', 'hr', 'math')}
 
+ORDINAL_ONLY_RE = re.compile(r'^(第[一二三四五六七八九十百千零〇两\d]+[章回节卷部篇编]|chapter\s*\d+|'
+                             r'[一二三四五六七八九十百千]+|[ivxlc]+|\d{1,3})$', re.I)
 CHAPTER_RE = re.compile(r'^(第[一二三四五六七八九十百千零〇\d]+[章篇部卷回节]|chapter\s*\d+|part\s*\d+)', re.I)
 TOC_TITLES = {'目录', '目次', 'contents', 'tableofcontents', '目录contents'}
 NOTE_TITLES = {'注释', '注', '注解', '注释与参考', '尾注', '脚注', '译注', 'notes'}
@@ -65,6 +68,8 @@ class Block:
     confidence: float = 1.0
     reason: str = ''
     group: int = -1                                     # caption/source 归属的 figure 块序号
+    merged: int = -1                                    # 与本标题合并的另一个标题块（章号 + 章名，04 §4.3）
+    ordinal_first: bool = True                          # 合并后先输出哪一块：章号块在前
 
     def short(self, n=30) -> str:
         return self.text[:n]
@@ -211,7 +216,7 @@ def extract_blocks(book: Book) -> list[Block]:
                     continue
                 if _is_block(ch) and (ch.tag in ATOMIC or not (ch.tag in CONTAINERS and _has_block_child(ch))
                                       and not _has_block_child(ch)):
-                    text = re.sub(r'\s+', ' ', ''.join(ch.itertext())).strip()
+                    text = squash(''.join(ch.itertext()))
                     ids = [ch.get('id')] if ch.get('id') else []
                     ids += [d.get('id') for d in ch.iterdescendants() if isinstance(d.tag, str) and d.get('id')]
                     size, bold, align = _visual(ch, classes)
@@ -228,7 +233,7 @@ def extract_blocks(book: Book) -> list[Block]:
                     walk(ch)
                 else:
                     # 块外的行内元素：空锚点（<span id=x/>）或游离文字（少见，作为段落）
-                    text = re.sub(r'\s+', ' ', ''.join(ch.itertext())).strip()
+                    text = squash(''.join(ch.itertext()))
                     ids = [d.get('id') for d in ch.iter() if isinstance(d.tag, str) and d.get('id')]
                     if not text:
                         pending.extend(ids)
@@ -256,7 +261,7 @@ def _toc_targets(book: Book) -> dict[tuple[str, str], str]:
                 href = a.get('href', '')
                 if href and not is_external(href):
                     out.setdefault((Book.resolve(navs[0].path, href), href.partition('#')[2]),
-                                   ' '.join(''.join(a.itertext()).split()))
+                                   squash(''.join(a.itertext())))
     return out
 
 
@@ -289,7 +294,50 @@ def analyze(book: Book) -> Analysis:
         elif label is not None and len(b.text) <= 60 and _norm(label)[:6] in _norm(b.text):
             b.role, b.reason = 'heading', f'目录项「{label[:20]}」指向此处'
 
-    # 2) 标题层级：按字号等级排序；无字号差异时「第X章」为 1 级
+    # 2) 书内目录页：标题是「目录/Contents」，其后到下一个标题前的全链接块
+    in_toc = False
+    for b in blocks:
+        key = _norm(b.text).lower().replace('\u3000', '')
+        if b.role == 'heading':
+            if in_toc and _link_only(b.el):           # 目录页条目写成 <h4><a>…</a></h4>
+                b.role, b.reason = 'toc', '目录页条目（链接型标题）'
+                continue
+            in_toc = key in TOC_TITLES or key.startswith('目录')
+            if in_toc:
+                b.role, b.reason = 'toc', '书内目录页标题'
+            continue
+        if key in TOC_TITLES:
+            b.role, b.reason, in_toc = 'toc', '书内目录页标题', True
+            continue
+        if in_toc and (_link_only(b.el) or not b.text):
+            b.role, b.reason = 'toc', '目录页条目'
+        else:
+            in_toc = False
+
+    # 3) 「第一回」单独一个标题、紧挨着章名标题：合并成一个（04 §4.3，08 决策 D1）
+    for b in blocks:
+        if b.role != 'heading' or b.merged >= 0:
+            continue
+        nxt = blocks[b.idx + 1] if b.idx + 1 < len(blocks) else None
+        if nxt is None or nxt.role != 'heading' or nxt.doc != b.doc or nxt.merged >= 0:
+            continue
+        a_ord, b_ord = bool(ORDINAL_ONLY_RE.match(b.text)), bool(ORDINAL_ONLY_RE.match(nxt.text))
+        if a_ord == b_ord:                         # 两个都是章号、或都不是：不合并
+            continue
+        if b_ord:                                  # 章名在前、章号在后：只有章号后面不再紧跟标题时才向前合并
+            after = blocks[nxt.idx + 1] if nxt.idx + 1 < len(blocks) else None
+            if after is not None and after.role == 'heading' and after.doc == nxt.doc:
+                continue                           # 这个章号属于后面的章名
+        ordinal, title = (b, nxt) if a_ord else (nxt, b)
+        b.merged, b.ordinal_first = nxt.idx, a_ord
+        b.text = f'{ordinal.text}\u3000{title.text}'
+        b.level = min(b.level, nxt.level) if b.level and nxt.level else (b.level or nxt.level)
+        b.size = max(b.size, nxt.size)
+        b.anchors = b.anchors + [x for x in nxt.anchors if x not in b.anchors]
+        nxt.role, nxt.reason, nxt.anchors = 'heading-merged', f'并入标题「{b.text[:12]}」', []
+        b.reason += '；章号与章名合并'
+
+    # 4) 标题层级：按字号等级排序；无字号差异时「第X章」为 1 级
     heads = [b for b in blocks if b.role == 'heading']
     from_toc = [b for b in heads if b.reason.startswith('目录项')]
     if from_toc:
@@ -313,24 +361,7 @@ def analyze(book: Book) -> Analysis:
                 for b in heads:
                     b.level = 1 if b.level <= lv else b.level - lv + 1
 
-    # 3) 书内目录页：标题是「目录/Contents」，其后到下一个标题前的全链接块
-    in_toc = False
-    for b in blocks:
-        key = _norm(b.text).lower().replace('\u3000', '')
-        if b.role == 'heading':
-            in_toc = key in TOC_TITLES or key.startswith('目录')
-            if in_toc:
-                b.role, b.reason = 'toc', '书内目录页标题'
-            continue
-        if key in TOC_TITLES:
-            b.role, b.reason, in_toc = 'toc', '书内目录页标题', True
-            continue
-        if in_toc and (_link_only(b.el) or not b.text):
-            b.role, b.reason = 'toc', '目录页条目'
-        else:
-            in_toc = False
-
-    # 4) 注释：短链接 [n] → 目标块以同一编号开头
+    # 5) 注释：短链接 [n] → 目标块以同一编号开头
     by_anchor = {(b.doc, a): b for b in blocks for a in b.anchors}
     noterefs: dict[int, list] = {}
     for b in blocks:
@@ -346,13 +377,25 @@ def analyze(book: Book) -> Analysis:
                 continue
             target.role, target.reason = 'note', f'被正文注号 {label} 指向'
             noterefs.setdefault(target.idx, []).append(a)
+    # 多段注：注释段之后、下一条注或标题之前，字号与注释相同的段落是续段（04 4.12.3.3）
+    for b in blocks:
+        if b.role != 'note':
+            continue
+        j = b.idx + 1
+        while j < len(blocks):
+            nb = blocks[j]
+            if nb.doc != b.doc or nb.role != 'para' and nb.role != 'quote' or nb.size != b.size \
+                    or NOTE_LABEL_RE.match(nb.text) or _norm(nb.text) in NOTE_TITLES:
+                break
+            nb.role, nb.group, nb.reason = 'note-cont', b.idx, '注释的续段'
+            j += 1
     for b in blocks:
         if b.role == 'para' and _norm(b.text) in NOTE_TITLES:
             nxt = blocks[b.idx + 1] if b.idx + 1 < len(blocks) else None
             if nxt is not None and nxt.role == 'note':
                 b.role, b.reason = 'note-head', '注释区小标题'
 
-    # 5) 图、图注、资料来源
+    # 6) 图、图注、资料来源
     for b in blocks:
         if b.role != 'para':
             continue
@@ -372,7 +415,7 @@ def analyze(book: Book) -> Analysis:
                 len(blocks[j].text) <= 120:
             blocks[j].role, blocks[j].group, blocks[j].reason = 'source', b.idx, '图后的资料来源'
 
-    # 6) 广告文件：整份文件多数块是引流内容
+    # 7) 广告文件：整份文件多数块是引流内容
     junk_docs = set()
     per_doc = Counter(b.doc for b in blocks)
     junk_hits = Counter(b.doc for b in blocks if JUNK_RE.search(b.text))
@@ -383,7 +426,7 @@ def analyze(book: Book) -> Analysis:
         if b.doc in junk_docs:
             b.role, b.reason = 'junk', '引流/广告页'
 
-    # 7) 其他：列表项、版权页、对齐短行、引文
+    # 8) 其他：列表项、版权页、对齐短行、引文
     section = ''
     for b in blocks:
         if b.role == 'heading':

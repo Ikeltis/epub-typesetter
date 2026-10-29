@@ -8,7 +8,7 @@ from lxml import etree
 
 from ..book import NS, Book, _strict_parser, has_html_entities
 from ..engine import AUTO, ERROR, MANUAL, WARNING, Rule, register
-from ..xhtml import HEADINGS, X, body, rename_ids, text_of
+from ..xhtml import HEADINGS, X, body, rename_ids, squash, text_of
 
 # NCName 的实用近似：字母/下划线开头（含 CJK 等非 ASCII 字母），后续可含数字、. - _，不含冒号与空白
 NCNAME = re.compile(r'^[A-Za-z_\u00c0-\uffff][\w.\-\u00b7\u00c0-\uffff]*$')
@@ -93,7 +93,7 @@ def _doc_title_candidate(book: Book, path: str) -> str:
     for h in HEADINGS:
         el = body(root).find('.//' + h)
         if el is not None:
-            t = ' '.join(text_of(el).split())
+            t = squash(text_of(el))
             if t:
                 return t[:80]
     md = book.opf.find('opf:metadata/dc:title', NS)
@@ -111,7 +111,7 @@ class DocTitle(Rule):
             if root.tag != X + 'html' or root.find(X + 'head') is None:
                 continue                  # 交给 SEM-002
             t = root.find(f'{X}head/{X}title')
-            text = ' '.join((t.text or '').split()) if t is not None else ''
+            text = squash(t.text or '') if t is not None else ''
             if not text:
                 out.append(self.issue(ERROR, '<title> 缺失或为空', path, AUTO))
             elif FILENAME_LIKE.search(text):
@@ -504,4 +504,56 @@ class ObsoleteMarkup(Rule):
                     c['thead 位置'] += 1
             book.mark_dirty(i.file)
             log.append(f'{i.file}：' + '、'.join(f'{k}×{n}' for k, n in c.most_common()))
+        return log
+
+
+# ---------- SEM-036：z3998: 前缀声明 ----------
+
+EPUB_PREFIX = '{%s}prefix' % NS['epub']
+EPUB_TYPE_ATTR = '{%s}type' % NS['epub']
+Z3998_URI = 'http://www.daisy.org/z3998/2012/vocab/structure/'
+
+
+def _uses_z3998(root) -> bool:
+    return any(isinstance(e.tag, str) and any(t.startswith('z3998:') for t in (e.get(EPUB_TYPE_ATTR) or '').split())
+               for e in root.iter())
+
+
+def _declares_z3998(value: str | None) -> bool:
+    return bool(re.search(r'(^|\s)z3998:\s+\S', value or ''))
+
+
+@register
+class Z3998Prefix(Rule):
+    """用了 z3998: 词就必须在 <html> 上声明 epub:prefix；写在 <body> 上无效（08 第 2 节实测）。"""
+    id, title, order = 'SEM-036', 'z3998: 前缀声明', 35
+
+    def check(self, book):
+        out = []
+        for path in book.content_docs():
+            root = book.tree(path).getroot()
+            body = root.find(X + 'body')
+            misplaced = body is not None and body.get(EPUB_PREFIX) is not None
+            if misplaced or (_uses_z3998(root) and not _declares_z3998(root.get(EPUB_PREFIX))):
+                msg = 'epub:prefix 写在 <body> 上（只能写在 <html>）' if misplaced else '用了 z3998: 词却没有在 <html> 上声明前缀'
+                out.append(self.issue(ERROR, msg, path, AUTO))
+        return out
+
+    def fix(self, book, issues):
+        log = []
+        for i in issues:
+            root = book.tree(i.file).getroot()
+            body = root.find(X + 'body')
+            parts = [root.get(EPUB_PREFIX) or '']
+            if body is not None and body.get(EPUB_PREFIX) is not None:
+                parts.append(body.attrib.pop(EPUB_PREFIX))
+            value = ' '.join(p.strip() for p in parts if p.strip())
+            if _uses_z3998(root) and not _declares_z3998(value):
+                value = (value + ' ' if value else '') + f'z3998: {Z3998_URI}'
+            if value:
+                root.set(EPUB_PREFIX, value)
+            else:
+                root.attrib.pop(EPUB_PREFIX, None)
+            book.mark_dirty(i.file)
+            log.append(f'{i.file}：epub:prefix 声明在 <html> 上（{value}）')
         return log

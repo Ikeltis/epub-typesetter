@@ -1,8 +1,10 @@
-"""重建（M2）：按语义分析结果把正文重写成干净的 EPUB 3 结构。
+"""重建（M2）：按语义分析结果把正文重写成干净的 EPUB 3 结构（规范见 guide/04）。
 
-- 一级标题处拆分文件（章），全书链接按 id 映射同步；
-- 角色 → 语义标签：h1/h2、figure+figcaption、ul、blockquote、p.source/meta/align-*；
-- 注释 → EPUB 3 标准弹注（noteref + aside footnote + 回链），全书连续编号，放在所在章末；
+- 部、章各成一个文件，全书链接按 id 映射同步（04 §4.2）；
+- 标题层级按全书结构：h1 只给书名页；无部时章 h2，有部时部 h2、章 h3；
+  样式由角色类决定（part-title / chapter-title / section-title / subsection-title，04 §4.3）；
+- 角色 → 语义标签：figure+figcaption、ul、blockquote、p.source/meta/align-*；
+- 注释 → 全书一个书末尾注文件（noteref + ol/li + ↩ 回链），全书连续编号（04 §4.12）；
 - 去掉表现型 span/style，统一换成主题样式表（themes/default.css，来自 guide/03、04）；
 - 书内目录页、注释区小标题、广告页删除（全部记录在 RebuildReport.removed，供文字校验与界面展示）；
 - 重新生成封面页、nav、NCX。
@@ -14,6 +16,7 @@ from __future__ import annotations
 import copy
 import posixpath
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from importlib import resources
 from xml.sax.saxutils import escape
@@ -24,7 +27,7 @@ from .book import NS, Book
 from .nav import NCX, Entry, build_nav, ncx_path
 from .semantic import BULLET_RE, NOTE_LABEL_RE, Analysis, Block, _local, _size_level, _style_of, class_styles
 from .upgrade import book_language, content_properties
-from .xhtml import X, is_external
+from .xhtml import X, is_external, squash
 
 EPUB = '{%s}' % NS['epub']
 XML_LANG = '{http://www.w3.org/XML/1998/namespace}lang'
@@ -42,6 +45,14 @@ TYPE_BY_TITLE = [
 ]
 
 
+CHAPTER_ONLY_RE = re.compile(r'^(第[一二三四五六七八九十百千零〇两\d]+[章回]|chapter\s*\d+)', re.I)
+PART_RE = re.compile(r'^(第[一二三四五六七八九十百千零〇两\d]+[部卷篇编辑]|卷[一二三四五六七八九十百千零〇\d]+|'
+                     r'[上中下]篇|[上中下]卷|[上中下]部|part\s*[\divx]+|book\s*[\divx]+|volume\s*[\divx]+)', re.I)
+
+
+ORDINAL_SEP_RE = re.compile(r'^(第[一二三四五六七八九十百千零〇两\d]+[章回节卷部篇编]|[上中下][篇卷部])[ \t]+(?=\S)')
+
+
 @dataclass
 class Chapter:
     title: str
@@ -49,6 +60,8 @@ class Chapter:
     path: str = ''
     epub_type: str = 'chapter'
     role: str | None = 'doc-chapter'
+    kind: str = 'chapter'                 # chapter / part / front（第一个标题之前的内容）
+    level: int = 2                        # 本文件首标题输出的 h 数字
 
 
 @dataclass
@@ -151,18 +164,60 @@ class Rebuilder:
 
     # ---------- 1. 分章 ----------
 
+    def plan_headings(self) -> None:
+        """按全书结构给每个标题定输出层级和角色类（04 §4.3）：
+        「第X章/回」所在层级为章；章的上一级若是「第X部/卷/篇」等，则为部。
+        结果存入 self.head_out：块序号 → (h 数字, 角色类或 None, 'part'/'chapter'/'sub')。"""
+        heads = [b for b in self.an.blocks if b.role == 'heading']
+        self.head_out: dict[int, tuple[int, str | None, str]] = {}
+        if not heads:
+            return
+        chap = Counter(h.level for h in heads if CHAPTER_ONLY_RE.match(h.text))
+        if chap and chap.most_common(1)[0][1] >= 2:
+            chapter_level = chap.most_common(1)[0][0]
+        else:   # 没有「第X章」：取最浅的、拆出不止一个文件的层级（书名级大标题时往下一级）
+            chapter_level = next((lv for lv in (1, 2, 3) if sum(1 for h in heads if h.level <= lv) > 1), 1)
+            # 这一级全是前言、后记、版权页之类的辅文，或数量不到下一级的三分之一：章在下一级
+            # （如「一　费尧多尔……」只用中文数字编号的章，上一级只有译序、人物表、尾声）
+            here = [h for h in heads if h.level == chapter_level]
+            below = [h for h in heads if h.level == chapter_level + 1]
+            front_back = re.compile(r'^(版权|献给|献词|人物表|重要人物|主要人物|作者的话|译本序|译序|译者|出版说明|尾声)')
+            if below and len(below) >= 3 * len(here) and all(
+                    any(rx.match(h.text) for rx, _, _ in TYPE_BY_TITLE) or front_back.match(h.text) for h in here):
+                chapter_level += 1
+        part_level = chapter_level - 1 if chapter_level > 1 and any(
+            h.level == chapter_level - 1 and PART_RE.match(h.text) for h in heads) else None
+        in_part = False
+        cur_n = 2
+        for h in heads:
+            if part_level is not None and h.level == part_level and PART_RE.match(h.text):
+                self.head_out[h.idx] = (2, 'part-title', 'part')
+                in_part, cur_n = True, 2
+            elif h.level <= chapter_level:
+                special = any(rx.match(h.text) for rx, t, _ in TYPE_BY_TITLE)   # 前言、后记等不属于部
+                if special:
+                    in_part = False
+                cur_n = 3 if in_part else 2
+                self.head_out[h.idx] = (cur_n, 'chapter-title', 'chapter')
+            else:
+                depth = h.level - chapter_level
+                cls = {1: 'section-title', 2: 'subsection-title'}.get(depth)
+                self.head_out[h.idx] = (min(cur_n + depth, 6), cls, 'sub')
+
     def split(self) -> list[Chapter]:
         chapters: list[Chapter] = []
         cur = None
-        # 拆分层级：一级标题只有一个（书名级大标题）时往下一级拆，否则全书会并成一个文件
-        heads = [b for b in self.an.blocks if b.role == 'heading']
-        split_level = next((lv for lv in (1, 2, 3) if sum(1 for h in heads if h.level <= lv) > 1), 1)
+        self.plan_headings()
         for b in self.an.blocks:
             if b.role in REMOVED_ROLES:
                 self.rep.removed.append((b.role, b.text))
                 continue
-            if b.role == 'heading' and b.level <= split_level or cur is None:
-                cur = Chapter(b.text if b.role == 'heading' else '')
+            out = self.head_out.get(b.idx) if b.role == 'heading' else None
+            if out is not None and out[2] in ('part', 'chapter') or cur is None:
+                if out is not None and out[2] in ('part', 'chapter'):
+                    cur = Chapter(b.text, kind=out[2], level=out[0])
+                else:
+                    cur = Chapter('', kind='front')
                 chapters.append(cur)
             cur.blocks.append(b)
         used = set()
@@ -172,7 +227,11 @@ class Rebuilder:
                 if rx.match(ch.title):
                     ch.epub_type, ch.role = t, role
                     break
-            if ch.epub_type == 'chapter':
+            if ch.kind == 'part':
+                ch.epub_type, ch.role = 'part', 'doc-part'
+                n_part = sum(1 for c in chapters[:chapters.index(ch) + 1] if c.kind == 'part')
+                name = f'part{n_part:02d}'
+            elif ch.epub_type == 'chapter':
                 n += 1
                 name = f'chapter{n:02d}'
             else:
@@ -210,13 +269,16 @@ class Rebuilder:
                         n += 1
                         self.note_of_block[note_idx] = n
                     num = self.note_of_block[note_idx]
-                    self.noteref_els[id(a)] = (num, ch.path)
+                    k = sum(1 for v in self.noteref_els.values() if v[0] == num) + 1   # 这是第 k 次引用
+                    self.noteref_els[id(a)] = (num, ch.path, f'noteref-{num}' if k == 1 else f'noteref-{num}-{k}')
                     note_block = self.an.blocks[note_idx]
                     if len(self.endnotes) < num:                 # 首次引用：登记到书末尾注
                         self.endnotes.append((num, note_block, ch.path))
-                        for anc in note_block.anchors:
-                            self.id_map[(note_block.doc, anc)] = self.endnotes_path
-                            self.frag_map[(note_block.doc, anc)] = f'note-{num}'
+                        conts = [x for x in self.an.blocks if x.role == 'note-cont' and x.group == note_idx]
+                        for nb in [note_block] + conts:
+                            for anc in nb.anchors:
+                                self.id_map[(nb.doc, anc)] = self.endnotes_path
+                                self.frag_map[(nb.doc, anc)] = f'note-{num}'
         self.rep.notes = n
 
     # ---------- 3. 链接改写 ----------
@@ -314,13 +376,13 @@ class Rebuilder:
         def convert(ch, d):
             tag = _local(ch.tag)
             if id(ch) in self.noteref_els:
-                num, _ = self.noteref_els[id(ch)]
+                num, _, ref_id = self.noteref_els[id(ch)]
                 if ch.get('id'):                       # 原注号上的 id 可能是注文回链的目标，保留
                     d.append(_el('span', {'id': ch.get('id')}))
                 # 不包 <sup>：上标效果由 CSS（a.noteref）实现，避免与 sup/small 叠加缩小（同 Standard Ebooks）
                 a = _el('a', {'class': 'noteref', EPUB + 'type': 'noteref', 'role': 'doc-noteref',
                               'href': f'{Book.relative(self.cur_new, self.endnotes_path)}#note-{num}',
-                              'id': f'noteref-{num}'}, str(num))
+                              'id': ref_id}, str(num))
                 d.append(a)
                 return
             if self._only_noteref(ch):
@@ -387,13 +449,14 @@ class Rebuilder:
         walk(src, dst)
         _resolve_soft(dst)
         # 块首尾空白
+        ws = ' \t\r\n\f\v'                  # 只剪源码空白；全角空格是内容（如章号与章名之间）
         if dst.text:
-            dst.text = dst.text.lstrip()
+            dst.text = dst.text.lstrip(ws)
         last = dst[-1] if len(dst) else None
         if last is not None and last.tail:
-            last.tail = last.tail.rstrip()
+            last.tail = last.tail.rstrip(ws)
         elif last is None and dst.text:
-            dst.text = dst.text.rstrip()
+            dst.text = dst.text.rstrip(ws)
 
     def _only_noteref(self, el) -> bool:
         """el 不是注号本身，但里面有注号，且除注号文字外没有别的文字。"""
@@ -433,7 +496,8 @@ class Rebuilder:
         etree.SubElement(head, X + 'link', {'rel': 'stylesheet', 'type': 'text/css',
                                             'href': Book.relative(ch.path, self.css_path)})
         body = etree.SubElement(html, X + 'body')
-        sec = etree.SubElement(body, X + 'section', {EPUB + 'type': ch.epub_type})
+        sec = etree.SubElement(body, X + 'section', {'id': posixpath.basename(ch.path)[:-6],
+                                                     EPUB + 'type': ch.epub_type})
         if ch.role:
             sec.set('role', ch.role)
         blocks = ch.blocks
@@ -441,8 +505,16 @@ class Rebuilder:
         while i < len(blocks):
             b = blocks[i]
             self.cur_doc = b.doc
+            if b.role == 'heading-merged':            # 已并入相邻标题
+                i += 1
+                continue
+            if b.role == 'note-cont':
+                if b.group in self.note_of_block:     # 随注文搬到书末尾注
+                    i += 1
+                    continue
+                b.role = 'para'
             if b.role == 'note':
-                if b.idx in self.note_of_block:       # 注文在首次引用的那一章末尾输出
+                if b.idx in self.note_of_block:       # 注文搬到书末尾注
                     i += 1
                     continue
                 b.role = 'para'                       # 没被引用的注（孤注）：按普通段落保留
@@ -466,10 +538,6 @@ class Rebuilder:
                     self.inline(blocks[j].el, cap, sized=True)
                     self._anchors(blocks[j], cap)
                     fig.append(cap)
-                    cap_text = ' '.join(''.join(cap.itertext()).split())
-                    for img in fig.iter(X + 'img'):
-                        if not img.get('alt'):
-                            img.set('alt', cap_text)
                     j += 1
                 for img in fig.iter(X + 'img'):
                     if img.get('alt') is None:
@@ -505,7 +573,8 @@ class Rebuilder:
                 i += 1
                 continue
             if b.role == 'heading':
-                e = _el(f'h{min(b.level, 6)}')
+                n_out, cls, _ = self.head_out.get(b.idx, (min(b.level + 1, 6), None, 'sub'))
+                e = _el(f'h{n_out}', {'class': cls})
                 self.heading_no += 1
                 e.set('id', f'h{self.heading_no}')     # 稳定 id，供 nav 定位；原有锚点由 _anchors 另加
             elif b.role in ('caption',):              # 没跟在图后面的图注：居中小字
@@ -513,7 +582,21 @@ class Rebuilder:
             else:
                 cls = {'source': 'source', 'meta': 'meta', 'right': 'align-right', 'center': 'align-center'}
                 e = _el('p', {'class': cls.get(b.role)})
-            self.inline(b.el, e, plain=b.role == 'heading', sized=b.role in ('caption', 'source'))
+            if b.role == 'heading' and b.merged >= 0:     # 章号与章名两个标题合并：「第一回　章名」
+                other = self.an.blocks[b.merged]
+                first, second = (b, other) if b.ordinal_first else (other, b)
+                self.cur_doc = first.doc
+                self.inline(first.el, e, plain=True)
+                if len(e):
+                    e[-1].tail = (e[-1].tail or '') + '\u3000'
+                else:
+                    e.text = (e.text or '') + '\u3000'
+                self.cur_doc = second.doc
+                self.inline(second.el, e, plain=True)
+            else:
+                self.inline(b.el, e, plain=b.role == 'heading', sized=b.role in ('caption', 'source'))
+                if b.role == 'heading' and e.text:            # 章号与章名之间统一为一个全角空格（04 §4.3）
+                    e.text = ORDINAL_SEP_RE.sub('\\1\u3000', e.text, count=1)
             self._anchors(b, e)
             sec.append(e)
             i += 1
@@ -533,7 +616,7 @@ class Rebuilder:
         body = etree.SubElement(html, X + 'body', {EPUB + 'type': 'backmatter'})
         sec = etree.SubElement(body, X + 'section', {'id': 'endnotes', 'class': 'endnotes',
                                                      EPUB + 'type': 'endnotes', 'role': 'doc-endnotes'})
-        etree.SubElement(sec, X + 'h1', {'id': 'endnotes-title'}).text = '注释'
+        etree.SubElement(sec, X + 'h2', {'id': 'endnotes-title', 'class': 'chapter-title'}).text = '注释'   # h1 只给书名页
         ol = etree.SubElement(sec, X + 'ol')
         for num, b, ref_path in self.endnotes:
             self.cur_doc = b.doc
@@ -553,14 +636,26 @@ class Rebuilder:
                             parent.text = (parent.text or '') + tail
                     break
             self.inline(body_src, p, NOTE_LABEL_RE, sized=True)
+            last = p
+            for nb in (x for x in self.an.blocks if x.role == 'note-cont' and x.group == b.idx):   # 多段注保留块结构
+                self.cur_doc = nb.doc
+                if nb.role == 'note-cont' and _local(nb.el.tag) == 'blockquote':
+                    last = etree.SubElement(li, X + 'blockquote')
+                    self.inline(nb.el, etree.SubElement(last, X + 'p'), sized=True)
+                else:
+                    last = etree.SubElement(li, X + 'p')
+                    self.inline(nb.el, last, sized=True)
             back = _el('a', {'class': 'backlink', EPUB + 'type': 'backlink', 'role': 'doc-backlink',
                              'aria-label': '返回正文',
                              'href': f'{Book.relative(self.endnotes_path, ref_path)}#noteref-{num}'}, '↩')
-            if len(p):
-                p[-1].tail = (p[-1].tail or '') + ' '
-            else:
-                p.text = (p.text or '') + ' '
-            p.append(back)
+            if last.tag == X + 'p':                       # 末块是段落：回链放段末，前面一个空格（SE 7.E）
+                if len(last):
+                    last[-1].tail = (last[-1].tail or '') + ' '
+                else:
+                    last.text = (last.text or '') + ' '
+                last.append(back)
+            else:                                        # 末块不是段落：回链单独成段
+                etree.SubElement(li, X + 'p').append(back)
         return html
 
     def _book_title(self) -> str:
@@ -605,12 +700,16 @@ class Rebuilder:
         if cover_item is not None:
             cover_path = posixpath.join(self.out_dir, 'cover.xhtml') if self.out_dir else 'cover.xhtml'
             src = Book.relative(cover_path, cover_item.path)
+            # 04 §4.14：封面页引用主题样式表（不写内联样式），alt 带书名
+            title = self._book_title()
+            alt = f'封面：《{title}》' if title else '封面'
+            css = Book.relative(cover_path, self.css_path)
             doc = (f'<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE html>\n'
                    f'<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" '
                    f'lang="{self.lang}" xml:lang="{self.lang}"><head><meta charset="utf-8"/><title>封面</title>'
-                   f'<style>html,body{{margin:0;padding:0;height:100%;text-align:center}}'
-                   f'img{{max-width:100%;max-height:100vh}}</style></head>'
-                   f'<body><section epub:type="cover"><img role="doc-cover" src="{escape(src)}" alt="封面"/>'
+                   f'<link rel="stylesheet" type="text/css" href="{escape(css)}"/></head>'
+                   f'<body epub:type="frontmatter"><section id="cover" class="cover-page" epub:type="cover">'
+                   f'<img role="doc-cover" src="{escape(src)}" alt="{escape(alt, {chr(34): "&quot;"})}"/>'
                    f'</section></body></html>\n')
             it = book.add_item(cover_path, 'application/xhtml+xml', item_id='cover-page', data=doc.encode())
             spine_ids.append(it.id)
@@ -636,8 +735,10 @@ class Rebuilder:
         book = self.book
         entries = []
         for ch, html in trees:
-            for k, h in enumerate(html.iter(X + 'h1', X + 'h2')):
-                entries.append(Entry(int(h.tag[-1]), ' '.join(''.join(h.itertext()).split()), ch.path,
+            heads = [h for h in html.iter(X + 'h2', X + 'h3', X + 'h4')
+                     if set((h.get('class') or '').split()) & {'part-title', 'chapter-title', 'section-title'}]
+            for k, h in enumerate(heads):
+                entries.append(Entry(int(h.tag[-1]) - 1, squash(''.join(h.itertext())), ch.path,
                                      '' if k == 0 else h.get('id')))
         chapters = [ch for ch, _ in trees]
         if not entries and chapters:                  # 全书没有标题：至少给一条指向正文开头

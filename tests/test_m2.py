@@ -81,11 +81,15 @@ def test_rebuild_structure_and_text_kept():
     assert spine == ['OEBPS/Text/cover.xhtml', 'OEBPS/Text/chapter01.xhtml', 'OEBPS/Text/chapter02.xhtml',
                      'OEBPS/Text/endnotes.xhtml']
     ch1 = out.tree('OEBPS/Text/chapter01.xhtml').getroot()
-    assert ch1.find(f'.//{X}section').get(EPUB_T) == 'chapter'
-    assert [h.text for h in ch1.iter(X + 'h1', X + 'h2')] == ['第1章 开始', '一节']
+    sec = ch1.find(f'.//{X}section')
+    assert sec.get(EPUB_T) == 'chapter' and sec.get('id') == 'chapter01'
+    # 04 §4.3：h1 只给书名页；章 h2.chapter-title，节 h3.section-title
+    assert [(h.tag[-2:], h.get('class'), h.text) for h in ch1.iter(X + 'h1', X + 'h2', X + 'h3')] == \
+        [('h2', 'chapter-title', '第1章\u3000开始'), ('h3', 'section-title', '一节')]   # 章号章名间统一全角空格
     fig = ch1.find(f'.//{X}figure')
     assert fig.find(f'{X}figcaption').text == '图1—1 示意图'
-    assert fig.find(f'{X}img').get('alt') == '图1—1 示意图' and fig.find(f'{X}img').get('width') is None
+    # 04 4.11.2.5：缺 alt 不复制图注（读屏会念两遍），写 alt="" 待补描述
+    assert fig.find(f'{X}img').get('alt') == '' and fig.find(f'{X}img').get('width') is None
     assert ch1.find(f".//{X}p[@class='source']") is not None
     assert [li.text for li in ch1.iter(X + 'li')] == ['要点一。', '要点二。']
     # 注释：同 Standard Ebooks，书末尾注文件 + 不包 sup 的注号 + 注文末尾 ↩ 回链
@@ -94,6 +98,7 @@ def test_rebuild_structure_and_text_kept():
     assert ref.find(f'{X}sup') is None and ref.getparent().tag != X + 'small'
     en = out.tree('OEBPS/Text/endnotes.xhtml').getroot()
     assert en.find(f'.//{X}section').get(EPUB_T) == 'endnotes'
+    assert en.find(f'.//{X}h2').get('class') == 'chapter-title' and en.find(f'.//{X}h1') is None
     li = en.find(f".//{X}li[@id='note-1']")
     assert ''.join(li.itertext()).strip().startswith('这是注释内容。')
     back = li.find(f".//{X}a[@class='backlink']")
@@ -108,7 +113,7 @@ def test_rebuild_structure_and_text_kept():
     # nav 由新标题生成
     nav = next(i for i in out.manifest() if 'nav' in i.properties)
     labels = [a.text for a in out.tree(nav.path).getroot().iter(X + 'a')]
-    assert labels[:4] == ['第1章 开始', '一节', '第2章 继续', '注释']
+    assert labels[:4] == ['第1章\u3000开始', '一节', '第2章\u3000继续', '注释']
     assert engine.fix(out).changes == []
 
 
@@ -153,3 +158,66 @@ def test_semantic_inline_styles_and_glyph_images_kept():
     span = p.find(f'{X}span')
     assert set(span.get('class').split()) == {'small', 'kaiti', 'accent'}
     assert span.find(f'{X}img').get('class') == 'glyph'
+
+
+PARTS = """<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head><body>
+<h1>第一部　山河</h1><h2>第一章　开端</h2><p>甲。<a href="c1.xhtml#n1" id="r1">[1]</a></p><h2>第二章　远行</h2><p>乙。<a href="c1.xhtml#n1" id="r2">[1]</a></p>
+<h1>第二部　风雨</h1><h2>第三章　归来</h2><p>丙。</p><h1>后记</h1><p>丁。</p>
+<p id="n1"><a href="c1.xhtml#r1">[1]</a>注文第一段。</p><p>注文第二段。</p><h1>附录</h1><p>戊。</p>
+</body></html>"""
+
+
+def test_parts_chapters_multiref_and_multiblock_notes():
+    b = Book.load(make_epub({'OEBPS/Text/c1.xhtml': PARTS, 'OEBPS/Text/c2.xhtml': None}))
+    rep = optimize(b)
+    out = Book.load(b.to_bytes())
+    spine = [i.path.rsplit('/', 1)[-1] for i in out.spine_items()]
+    assert spine[:7] == ['cover.xhtml', 'part01.xhtml', 'chapter01.xhtml', 'chapter02.xhtml', 'part02.xhtml',
+                         'chapter03.xhtml', 'afterword.xhtml']
+    part = out.tree('OEBPS/Text/part01.xhtml').getroot()
+    assert part.find(f'.//{X}section').get(EPUB_T) == 'part'
+    assert part.find(f'.//{X}h2').get('class') == 'part-title'
+    ch = out.tree('OEBPS/Text/chapter01.xhtml').getroot()
+    assert ch.find(f'.//{X}h3').get('class') == 'chapter-title'           # 有部时章用 h3
+    aft = out.tree('OEBPS/Text/afterword.xhtml').getroot()
+    assert aft.find(f'.//{X}h2').get('class') == 'chapter-title'          # 后记不属于部，回到 h2
+    # 同一条注被引用两次：第二处 id 为 noteref-1-2，回链指第一处（04 4.12.1.6）
+    ids = [a.get('id') for p in ('chapter01.xhtml', 'chapter02.xhtml')
+           for a in out.tree('OEBPS/Text/' + p).getroot().iter(X + 'a') if a.get('class') == 'noteref']
+    assert ids == ['noteref-1', 'noteref-1-2']
+    li = out.tree('OEBPS/Text/endnotes.xhtml').getroot().find(f".//{X}li[@id='note-1']")
+    ps = li.findall(f'{X}p')
+    assert len(ps) == 2 and ps[0].text.startswith('注文第一段') and ps[1].text.startswith('注文第二段')
+    assert ps[1].find(f"{X}a[@class='backlink']").get('href') == 'chapter01.xhtml#noteref-1'
+    assert compare_blocks(rep.analysis.blocks, REMOVED_ROLES, out).ok
+    # nav：部在顶层，章嵌套其下
+    nav = next(i for i in out.manifest() if 'nav' in i.properties)
+    toc = out.tree(nav.path).getroot().find(f".//{X}nav[@{EPUB_T}='toc']")
+    top = [li.find(f'{X}a').text for li in toc.find(f'{X}ol').findall(f'{X}li')]
+    assert top[:3] == ['第一部\u3000山河', '第二部\u3000风雨', '后记']
+    assert engine.fix(out).changes == []
+
+
+def test_cover_page_alt_and_no_inline_style():
+    b = Book.load(kindle_like())
+    optimize(b)
+    out = Book.load(b.to_bytes())
+    cover = out.files['OEBPS/Text/cover.xhtml'].decode()
+    assert 'alt="封面：《测试书》"' in cover and '<style' not in cover and 'typesetter.css' in cover
+
+
+def test_ordinal_and_title_headings_merged_and_toc_headings_dropped():
+    body = ('<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title>'
+            '</head><body><p>目 录</p><h4><a href="c1.xhtml#a1">第一回　开端</a></h4><h4><a href="c1.xhtml#a2">第二回　远行</a></h4>'
+            '<h3 id="a1">第一回</h3><h2>开端</h2><p>甲。</p><h3 id="a2">第二回</h3><h2>远行</h2><p>乙。</p></body></html>')
+    b = Book.load(make_epub({'OEBPS/Text/c1.xhtml': body, 'OEBPS/Text/c2.xhtml': None}))
+    rep = optimize(b)
+    out = Book.load(b.to_bytes())
+    chs = [i.path for i in out.spine_items() if 'chapter' in i.path]
+    assert len(chs) == 2
+    h = out.tree(chs[0]).getroot().find(f'.//{X}h2')
+    assert ''.join(h.itertext()) == '第一回　开端' and h.get('class') == 'chapter-title'
+    assert h.get('id') == 'a1'                                       # 原锚点保留
+    assert sum(1 for r, _ in rep.rebuild.removed if r == 'toc') == 3  # 目录页标题 + 两个链接型标题
+    assert compare_blocks(rep.analysis.blocks, REMOVED_ROLES, out).ok

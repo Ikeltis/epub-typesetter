@@ -40,6 +40,15 @@ def text_of(el: etree._Element) -> str:
     return ''.join(el.itertext())
 
 
+_SRC_WS = re.compile(r'[ \t\r\n\f\v]+')
+
+
+def squash(s: str) -> str:
+    """合并源码里的空白（半角空格、制表、换行）并去首尾。不动全角空格：
+    章号与章名之间的全角空格是规范要求的内容（04 §4.3），str.split() 会把它误当空白吃掉。"""
+    return _SRC_WS.sub(' ', s or '').strip(' \t\r\n\f\v')
+
+
 def is_xhtml_doc(book: Book, path: str) -> bool:
     it = book.item_by_path(path)
     return it is not None and it.media_type in XHTML_TYPES

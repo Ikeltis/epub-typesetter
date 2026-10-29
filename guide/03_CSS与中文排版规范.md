@@ -39,7 +39,7 @@ EPUB 是重排（reflowable）媒介：版面由 RS 在运行时根据屏幕、�
 - 标题样式丢失 → 仍是 `h1–h6`，目录与导航不受影响；**禁止**用加粗 `<p>` 冒充标题。
 - 诗/信/引文的缩进丢失 → 仍是 `blockquote`/成组 `p`，行与行仍分行；诗句行用独立 `<p>` 而非 `<br/>` 时，丢样式也不会连成一片。
 - 图注丢失居中 → `figure/figcaption` 仍在 DOM 中相邻。
-- 注释：默认做成书末尾注文件（04 T16），弹注不可用时点注号跳到书末、↩ 返回；注文**不得 `display:none` 隐藏**。
+- 注释：默认做成书末尾注文件（04 §4.12），弹注不可用时点注号跳到书末、↩ 返回；注文**不得 `display:none` 隐藏**。
 - 所有图片必须有 `alt`；重要信息不做成纯图片。
 - 颜色、背景、`::before/::after` 只做装饰。
 
@@ -135,6 +135,7 @@ EPUB 是重排（reflowable）媒介：版面由 RS 在运行时根据屏幕、�
 - 汉字按字间微调，效果好；含长英文/URL 的行会出现大空隙。对以西文为主的块、窄栏（表格内、悬挂缩进内）用 `text-align:left`（`.align-left`）。
 - `text-justify`：**默认不设**（`auto`）。原书（及 Lithium 一类老阅读器）用的 `text-justify:inter-ideograph` 是旧草案值，现行 CSS Text 3 已无此值；而 `inter-character` 会把西文单词的字母也拉开，对中西混排有害。浏览器内核对 CJK 的 `auto` 已按字符分配间距【需实测】。
 - 末行对齐：`text-align-last` 默认不设；仅表格竖表头（四字撑齐）等少数场景使用。
+- 与 Standard Ebooks 的差异：SE 不设全局对齐，让阅读器的用户偏好决定；我们**保持** `body{text-align:justify}`，因为中文书惯例是两端对齐，用户在阅读器里仍可覆盖（08 决策 D10）。
 
 **长行**：行过长（>40 字）降低可读性。是否限制 `max-width` 取决于 RS 的分栏策略，限制可能与分页冲突【需实测】，不作默认。
 
@@ -160,21 +161,21 @@ EPUB 是重排（reflowable）媒介：版面由 RS 在运行时根据屏幕、�
 
 | 角色 | 选择器 | 字号 | margin（上 0 下） | 字体 |
 |---|---|---|---|---|
-| 章首标题（每文件第一个标题，章/篇/附录名） | `h1`、`.chapter-title` | 1.5em | `25% 0 1.5em` | 黑体族 |
+| 章首标题（每文件第一个标题，章/篇/附录名） | `.chapter-title` | 1.5em | `25% 0 1.5em` | 黑体族 |
 | 篇章页大标题 | `.part-title` | 1.8em | `35% 0 1em`，居中 | 黑体族 |
-| 节标题 | `h2` | 1.3em | `2em 0 .8em` | 黑体族 |
-| 小节标题 | `h3` | 1.15em | `1.6em 0 .6em` | 黑体族 |
+| 节标题（章内第一级） | `.section-title` | 1.3em | `2em 0 .8em` | 黑体族 |
+| 小节标题（章内第二级） | `.subsection-title` | 1.15em | `1.6em 0 .6em` | 黑体族 |
 | 四级 | `h4` | 1.05em | `1.3em 0 .4em` | 宋体（继承），粗体 |
 | 五、六级 | `h5, h6` | 1em | `1em 0 .3em` | 继承，粗体 |
 | 副标题 | `p.subtitle` | .9em | `-.8em 0 1.5em`（贴近主标题） | 楷体族 |
 
 **章首 vs 节内**：章首的 `margin-top:25%`（相对容器宽度）是用 margin 实现的视觉下沉，只在「标题位于页面顶部」时合理。标题若出现在页中则留出大块空白。因此：
 
-- 默认 `h1` 视为章首样式；若书用 h1 作书名/篇名而以 h2 作章名，则给章名加 `class="chapter-title"`（样式同 h1）。
-- `h2/h3…` 默认是节内样式（小 margin），在文件中位置靠后，不下沉。
+- **样式按角色类，不按标题数字**（2026-10-29 修订）：标题的数字只表达全书层级（04 §4.3：`h1` 只给书名页；无部时章 `h2`、节 `h3`；有部时部 `h2`、章 `h3`、节 `h4`），同一个角色在不同书里数字会不同。所以章、部、节、小节一律挂角色类 `.chapter-title` / `.part-title` / `.section-title` / `.subsection-title`，样式由类决定。
+- 不带角色类的 `h1–h6` 只用下表「四级」以下的兜底样式，保证丢了类名也大小有序。
 - 取值 25% 的依据：书为 30%；25% 在 360px 宽手机约 90px、平板 768px 约 190px，均不过半屏。范围 20–30%。
 - 不要在同一文件中出现多个章首标题（每文件一个，见 02）。
-- 章名带序号的两行标题：`<h1><span class="title-num">第一章</span><span class="title-name">侯门庶子</span></h1>`，两个 span 设 `display:block`（见 04）。
+- 章名带序号：整体放在一个标题里，序号与章名之间一个全角空格：`<h2 class="chapter-title">第一章　侯门庶子</h2>`。需要分两行显示时用 `span.title-num` / `span.title-name` 并设 `display:block`，全角空格保留在两个 span 之间（04 §4.3，08 决策 D1）。
 
 ---
 
@@ -218,7 +219,7 @@ body{ line-break:strict; word-break:normal; overflow-wrap:break-word; }
 - 中文规范要求汉字与西文字母、数字之间有约 1/8–1/4 em 的间隔（不是整个半角空格）。CSS Text 4 的 `text-autospace`（`normal` ≈ `ideograph-alpha ideograph-numeric`）由引擎自动加此间隔；较新的 Chromium/WebKit 系有实现，其余【需实测】。
 - 策略：文本里**不批量插入空格**（保留作者已有的；是否统一见 06）；样式表写 `text-autospace:normal` 作增强，不支持则忽略，退回「汉字西文紧贴」，仍可读。
 - 西文字体：汉字字体含拉丁字形但往往不美观。**未嵌入字体时不强行指定西文字体**，由 RS 字体回落（字体回落以「字符」为单位）；嵌入字体时见 §8.4。
-- 语言标注：全书 `lang="zh-CN"`（繁体 `zh-Hant`/`zh-TW`）；大段西文用 `<span lang="en">`；`lang` 同时决定 CJK 字形（汉字「骨」「直」等地区字形差异）与连字符/断词策略，**缺失 `lang` 是常见错误**（02 检查）。
+- 语言标注：以原书 `dc:language` 为准；需要新生成时简体写 `zh-Hans`、繁体写 `zh-Hant`（见 08 第 3 节）；大段西文用 `<span lang="en">`；`lang` 同时决定 CJK 字形（汉字「骨」「直」等地区字形差异）与连字符/断词策略，**缺失 `lang` 是常见错误**（02 检查）。
 - 斜体：中文无真斜体，引擎合成的伪斜体难看。`<i>`、`<em>` 作用于汉字时，用楷体、着重号或黑体代替；西文（`lang="en"`、书名原文、学名、变量）保持斜体（§7.7）。
 - 数字与单位：`10 kg`、`5 mm` 的空格保留；单位用正体；千位分隔符、小数点半身（见 06）。
 - 数字用等宽/比例：表格数字列 `font-variant-numeric:tabular-nums`（支持则对齐，不支持无害）。
@@ -412,7 +413,7 @@ body{ font-family:"Book Serif","Songti SC","SimSun",serif; }   /* 嵌入字体�
 | 竖排使用物理 margin、手工替换竖排标点码位 | 方向错乱 | 逻辑属性；保持横排码位 |
 | 用 `outline` 画框、`opacity` 做淡色、`column-*` 分栏 | RS 支持不一 | `border`、`rgba` 颜色；不分栏 |
 | `border-collapse:collapse` 且依赖 1px 细线精确 | 个别 RS 双线 | 接受；或表格线只用 `border-top/left` 拼接 |
-| `id` 选择器、复杂链式后代选择器、`:nth-child` 做关键样式 | 旧 RS 支持差，难维护 | class；斑马纹用显式 `.odd` |
+| `id` 选择器、复杂链式后代选择器、`:nth-child` 做关键样式 | 旧 RS 支持差，难维护 | class；斑马纹用显式 `.odd`。只出现一两次的特殊样式也不用 `#id`：出现 3 次及以上用 class，少于 3 次用「类 + 元素」结构选择器（08 决策 D9；SE 用 `#section-id`，不采用） |
 | `@import`、外部 URL、`-epub-` 新增 | 离线/兼容 | 合并样式表；本地资源 |
 | `vh/vw` 控制文字 | 分页模型下不稳定 | em |
 | 厂商私有属性（任何 `duokan-*`、`zy-*` 等） | 非标准 | 删除（本规范不收） |
@@ -456,30 +457,30 @@ p.gap{ margin-top:1.5em; }                       /* [书] 空一行，替代 <p>
 .no-break{ white-space:nowrap; }
 .small{ font-size:.875em; }                      /* [书] 五号 */
 
-/* ===== 2. 标题（章首与节内区分；字号、margin 见 03 §6） ===== */
-h1, h2, h3, h4, h5, h6, .chapter-title, .part-title{
+/* ===== 2. 标题：样式按角色类，数字只表示层级（03 §6、04 §4.3） ===== */
+h1, h2, h3, h4, h5, h6{
   font-weight:normal; text-indent:0; text-align:left; line-height:1.4;
   page-break-after:avoid; break-after:avoid;
   page-break-inside:avoid; break-inside:avoid;
 }
-h1, .chapter-title{                              /* 章首：视觉下沉 */
-  margin:25% 0 1.5em; font-size:1.5em;           /* [书30% → 25%] */
-  font-family:"Source Han Sans SC","Noto Sans CJK SC","PingFang SC","Microsoft YaHei","SimHei",sans-serif;
-  text-wrap:balance;                             /* [补，需实测] */
-}
-.part-title{ margin:35% 0 1em; font-size:1.8em; text-align:center;
-  font-family:"Source Han Sans SC","Noto Sans CJK SC","PingFang SC","Microsoft YaHei","SimHei",sans-serif; }
-h2{ margin:2em 0 .8em;  font-size:1.3em;  text-wrap:balance;
-  font-family:"Source Han Sans SC","Noto Sans CJK SC","PingFang SC","Microsoft YaHei","SimHei",sans-serif; }
-h3{ margin:1.6em 0 .6em; font-size:1.15em;
-  font-family:"Source Han Sans SC","Noto Sans CJK SC","PingFang SC","Microsoft YaHei","SimHei",sans-serif; }
+h1, h2, h3{ font-family:"Source Han Sans SC","Noto Sans CJK SC","PingFang SC","Microsoft YaHei","SimHei",sans-serif; }
+/* 兜底：没有角色类的标题按数字大小有序 */
+h1{ margin:1.5em 0 1em; font-size:1.5em; }
+h2{ margin:1.6em 0 .7em; font-size:1.25em; }
+h3{ margin:1.4em 0 .6em; font-size:1.15em; }
 h4{ margin:1.3em 0 .4em; font-size:1.05em; font-weight:bold; }
 h5, h6{ margin:1em 0 .3em; font-size:1em; font-weight:bold; }
-h2.chapter-title{ margin:25% 0 1.5em; font-size:1.5em; }   /* h2 作章名时 */
-h1.align-center, h2.align-center, h3.align-center{ text-align:center; }
+/* 角色类（优先于兜底，与层级数字无关） */
+.part-title{ margin:35% 0 1em; font-size:1.8em; text-align:center; font-weight:normal; }
+.chapter-title{ margin:25% 0 1.5em; font-size:1.5em; font-weight:normal; text-wrap:balance; }   /* [书30% → 25%]；text-wrap 需实测 */
+.section-title{ margin:2em 0 .8em; font-size:1.3em; font-weight:normal; text-wrap:balance; }
+.subsection-title{ margin:1.6em 0 .6em; font-size:1.15em; font-weight:normal; }
+.part-title, .chapter-title, .section-title, .subsection-title{
+  font-family:"Source Han Sans SC","Noto Sans CJK SC","PingFang SC","Microsoft YaHei","SimHei",sans-serif; }
+.align-center.chapter-title, .align-center.section-title{ text-align:center; }
 p.subtitle{ margin:-.8em 0 1.5em; font-size:.9em; text-indent:0; text-align:left;
   font-family:"Kaiti SC","STKaiti","KaiTi",serif; }                   /* 副标题小于主标题 */
-.title-num, .title-name{ display:block; }        /* 两行标题（第N章 / 章名） */
+.title-num, .title-name{ display:block; }        /* 两行显示时；两 span 之间保留全角空格 */
 
 /* ===== 3. 引文 ===== */
 blockquote{ margin:.75em 0 .75em 2em; padding:0; }            /* [书] 左2em，上下.75em */
@@ -511,7 +512,9 @@ tr.odd{ background:rgba(127,127,127,.08); }      /* 斑马纹：显式 class，�
 
 /* ===== 7. 行内 ===== */
 em{ font-style:normal; font-family:"Kaiti SC","STKaiti","KaiTi",serif; }  /* 汉字无真斜体：楷体强调 */
-:lang(en) em, em:lang(en), i, cite{ font-style:italic; font-family:inherit; }  /* 西文保持斜体 */
+i, cite{ font-style:normal; }                    /* 中文没有真斜体：默认正体，避免书名被硬拉斜 */
+:lang(en) em, em:lang(en), :lang(en) i, i:lang(en), :lang(en) cite, cite:lang(en){
+  font-style:italic; font-family:inherit; }      /* 只有标了西文 lang 的才斜体；外文 i/cite 须带 lang */
 strong, b{ font-weight:bold; }
 .dot{ -webkit-text-emphasis:filled dot; -webkit-text-emphasis-position:under right;
   text-emphasis:filled dot; text-emphasis-position:under right; font-style:normal; font-family:inherit; }
@@ -583,3 +586,7 @@ p.page-break, .page-break{ page-break-before:always; break-before:page; }   /* �
 17. 表格列数过多（>6 列）、过宽；长 URL 引起的溢出。
 18. 使用了 L2 属性但无降级说明（如仅靠 `text-emphasis` 表达强调且无 `<em>`）。
 19. 每条规则输出前后差异、命中数；规则幂等；高风险（标题章首识别、断行合并）默认只出建议。
+
+---
+
+修订记录：2026-10-29 参照 Standard Ebooks 修订（见 08）：语言码写法、斜体规则、一次性样式不用 id 选择器、保留两端对齐的说明；标题样式改为按角色类（`.part-title` / `.chapter-title` / `.section-title` / `.subsection-title`），数字只表示层级。

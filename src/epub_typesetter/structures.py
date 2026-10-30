@@ -14,9 +14,13 @@
   剧本对白         只建议（C，04 §4.9 识别信号）。
 
 置信度只有 A、B 自动改写；C 写进 Analysis.suggestions，由报告展示、用户确认。
+
+确认板（board.py）：每个结构与建议有稳定的 key（类别 + 文件 + 首块文字摘要 + 序号），
+用户的取舍在 apply_decisions 里落地——拒绝的结构还原成原角色，接受的建议按模板改写。
 """
 from __future__ import annotations
 
+import hashlib
 import re
 from collections import Counter
 
@@ -52,9 +56,11 @@ GLOSSARY_TITLE = re.compile(r'^(术语表|名词解释|词汇表|译名对照表
 TABLE_CAPTION = re.compile(r'^(表|table)\s*[\d一二三四五六七八九十]', re.I)
 TABLE_NOTE = re.compile(r'^注[：:]')
 DIALOGUE = re.compile(r'^([^，。！？：:\s（(“”「」]{1,6})[：:　]\S')
+STAGE = re.compile(r'[（(〔［].+[）)〕］]')
 TERM_LINE = re.compile(r'^([^，。！？：:\s]{1,12})[：:—]+\S')
 
 PLAIN = ('para', 'quote', 'center', 'right')
+LISTABLE = ('para', 'quote')                 # 引文里的序号段同样成列表
 
 
 def _local(el) -> str:
@@ -114,15 +120,26 @@ class _Ctx:
         self.book, self.an, self.blocks = book, an, an.blocks
         self.next_unit = 0
         self._main: dict[str, tuple[str, float]] = {}
+        self._keys: Counter = Counter()
+        self.orig = {b.idx: b.role for b in an.blocks}       # 识别前的角色：用户拒绝某个结构时还原
 
-    def unit(self, kind: str, **info) -> int:
+    def key(self, kind: str, b) -> str:
+        """稳定键：同一本原书每次分析都一样，确认板的决定靠它对上。"""
+        base = f'{kind}:{b.doc}:{hashlib.sha1(b.text.encode()).hexdigest()[:8]}'
+        self._keys[base] += 1
+        return base if self._keys[base] == 1 else f'{base}#{self._keys[base]}'
+
+    def unit(self, kind: str, first=None, **info) -> int:
         u = self.next_unit
         self.next_unit += 1
-        self.an.units[u] = {'kind': kind, **info}
+        self.an.units[u] = {'kind': kind, 'key': self.key(kind, first) if first is not None else f'{kind}:{u}', **info}
         return u
 
-    def suggest(self, kind: str, b, text: str) -> None:
-        self.an.suggestions.append({'kind': kind, 'doc': b.doc, 'text': text})
+    def suggest(self, kind: str, b, text: str, blocks: list | None = None, **data) -> None:
+        """C 级建议。给了 blocks 的可以在确认板上勾选执行，否则只是提示。"""
+        self.an.suggestions.append({'kind': kind, 'doc': b.doc, 'text': text, 'key': self.key(f's-{kind}', b),
+                                    'actionable': blocks is not None,
+                                    'blocks': [x.idx for x in blocks or []], **data})
 
     def main_class(self, doc: str) -> str:
         if doc not in self._main:
@@ -222,42 +239,49 @@ def detect_poems(ctx: _Ctx) -> None:
             level = 'B'
         else:
             if n_clauses >= 4:
-                ctx.suggest('poem', b, f'疑似诗歌（规整{next(iter(L))}言，前无引出语或诗题）：{b.text[:30]}')
+                ctx.suggest('poem', b, f'疑似诗歌（规整{next(iter(L))}言，前无引出语或诗题）：{b.text[:30]}', run,
+                            title=title.idx if title is not None else None)
             i = j
             continue
-        all_lines = [(t, w) for c in run for t, w in _poem_lines(c)]
-        texts = [t for t, _ in all_lines if t]
-        base = min((w for t, w in all_lines if t), default=0)
-        indents = [min(3, int(-(-(w - base) // 2))) if t else 0 for t, w in all_lines]
-        lens = [len(_clean(t)) for t in texts]
-        cls = ' '.join((c.el.get('class') or '') for c in run).lower()
-        if any(indents) or 'left' in cls:
-            layout = 'poem-left'
-        elif 'center' in cls or (len(texts) >= 2 and max(lens) - min(lens) <= 1 and max(lens) <= 20):
-            layout = 'poem-center'
-        else:
-            layout = 'poem-left'
-        whole = title is not None or hinted or len(texts) >= 4
-        attribution = None
-        after = ctx.nxt(run[-1])
-        if after is not None and after.role in PLAIN and after.unit < 0 and len(after.text) <= 40 \
-                and re.match(r'^[—－-]{1,2}', after.text):
-            attribution = after
-        u = ctx.unit('poem', level=level, layout=layout, type='z3998:poem' if whole else 'z3998:verse',
-                     container='div' if title is not None else 'blockquote', lines=len(texts))
-        k = 0
-        for c in run:
-            c.role, c.unit, c.part = 'poem', u, 'lines'
-            n = len(_poem_lines(c))
-            c.attrs['indents'] = indents[k:k + n]
-            c.reason = f'诗歌（{level}）'
-            if n > 1 or c.el.find('.//' + X + 'br') is not None:   # 按 br 拆行后，行首缩进空格去掉
-                c.verify = ''.join(t for t, _ in _poem_lines(c))
-            k += n
-        for blk, part in ((title, 'title'), (author, 'author'), (attribution, 'attribution')):
-            if blk is not None:
-                blk.role, blk.unit, blk.part, blk.reason = 'poem', u, part, f'诗歌的{part}'
+        make_poem(ctx, run, title, author, level, hinted)
         i = j
+
+
+def make_poem(ctx: _Ctx, run: list, title, author, level: str, hinted: bool = False) -> int:
+    """把一串诗行块（及可选的诗题、作者、出处）定为一首诗（04 §4.7）。"""
+    all_lines = [(t, w) for c in run for t, w in _poem_lines(c)]
+    texts = [t for t, _ in all_lines if t]
+    base = min((w for t, w in all_lines if t), default=0)
+    indents = [min(3, int(-(-(w - base) // 2))) if t else 0 for t, w in all_lines]
+    lens = [len(_clean(t)) for t in texts]
+    cls = ' '.join((c.el.get('class') or '') for c in run).lower()
+    if any(indents) or 'left' in cls:
+        layout = 'poem-left'
+    elif 'center' in cls or (len(texts) >= 2 and max(lens) - min(lens) <= 1 and max(lens) <= 20):
+        layout = 'poem-center'
+    else:
+        layout = 'poem-left'
+    whole = title is not None or hinted or len(texts) >= 4
+    attribution = None
+    after = ctx.nxt(run[-1])
+    if after is not None and after.role in PLAIN and after.unit < 0 and len(after.text) <= 40 \
+            and re.match(r'^[—－-]{1,2}', after.text):
+        attribution = after
+    u = ctx.unit('poem', run[0], level=level, layout=layout, type='z3998:poem' if whole else 'z3998:verse',
+                 container='div' if title is not None else 'blockquote', lines=len(texts))
+    k = 0
+    for c in run:
+        c.role, c.unit, c.part = 'poem', u, 'lines'
+        n = len(_poem_lines(c))
+        c.attrs['indents'] = indents[k:k + n]
+        c.reason = f'诗歌（{level}）'
+        if n > 1 or c.el.find('.//' + X + 'br') is not None:   # 按 br 拆行后，行首缩进空格去掉
+            c.verify = ''.join(t for t, _ in _poem_lines(c))
+        k += n
+    for blk, part in ((title, 'title'), (author, 'author'), (attribution, 'attribution')):
+        if blk is not None:
+            blk.role, blk.unit, blk.part, blk.reason = 'poem', u, part, f'诗歌的{part}'
+    return u
 
 
 # ---------- 书信 ----------
@@ -322,7 +346,7 @@ def detect_letters(ctx: _Ctx) -> None:
                 c = ctx.nxt(c)
             else:
                 break
-        u = ctx.unit('letter', level='B')
+        u = ctx.unit('letter', head[0], level='B')
         for x in head:
             x.role, x.unit, x.part = 'letter', u, 'salutation' if x is b else 'salutation-pre'
         for x in body:
@@ -351,7 +375,7 @@ def detect_lists(ctx: _Ctx) -> None:
     i = 0
     while i < len(blocks):
         b = blocks[i]
-        m = OL_NUM.match(b.text) if b.role == 'para' and b.unit < 0 else None
+        m = OL_NUM.match(b.text) if b.role in LISTABLE and b.unit < 0 else None
         if not m or _num_in_link(b):
             i += 1
             continue
@@ -359,14 +383,14 @@ def detect_lists(ctx: _Ctx) -> None:
         j = i + 1
         while j < len(blocks):
             c = blocks[j]
-            mc = OL_NUM.match(c.text) if c.doc == b.doc and c.role == 'para' and c.unit < 0 else None
+            mc = OL_NUM.match(c.text) if c.doc == b.doc and c.role in LISTABLE and c.unit < 0 else None
             if not mc or int(mc.group(1)) != nums[-1] + 1 or _num_in_link(c):
                 break
             run.append(c)
             nums.append(int(mc.group(1)))
             j += 1
         if len(run) >= 3:
-            u = ctx.unit('ol', level='B', start=nums[0])
+            u = ctx.unit('ol', run[0], level='B', start=nums[0])
             for c in run:
                 c.role, c.unit, c.part, c.reason = 'ol', u, 'li', '阿拉伯数字序号段'
                 c.verify = OL_NUM.sub('', c.text.strip(), count=1)
@@ -375,26 +399,30 @@ def detect_lists(ctx: _Ctx) -> None:
     i = 0
     while i < len(blocks):
         b = blocks[i]
-        if not (b.role == 'para' and b.unit < 0 and CN_ITEM.match(b.text)):
+        if not (b.role in LISTABLE and b.unit < 0 and CN_ITEM.match(b.text)):
             i += 1
             continue
         run = [b]
         j = i + 1
-        while j < len(blocks) and blocks[j].doc == b.doc and blocks[j].role == 'para' and blocks[j].unit < 0 \
+        while j < len(blocks) and blocks[j].doc == b.doc and blocks[j].role in LISTABLE and blocks[j].unit < 0 \
                 and CN_ITEM.match(blocks[j].text):
             run.append(blocks[j])
             j += 1
         if len(run) >= 2:
             n = max(2 if len(CN_ITEM.match(c.text).group(1)) <= 2 else min(4, len(CN_ITEM.match(c.text).group(1)))
                     for c in run)
+            u = ctx.unit('item', run[0], level='A')
             for c in run:
-                c.role, c.reason, c.attrs['hang'] = 'item', '中文序号项', n
+                c.role, c.unit, c.reason, c.attrs['hang'] = 'item', u, '中文序号项', n
         i = j
     # 条文：一个文件里「第X条」≥2 段
     per_doc = Counter(b.doc for b in blocks if b.role == 'para' and ARTICLE.match(b.text))
+    units: dict[str, int] = {}
     for b in blocks:
         if b.role == 'para' and per_doc[b.doc] >= 2 and ARTICLE.match(b.text):
-            b.role, b.reason = 'article', '法规条文'
+            if b.doc not in units:
+                units[b.doc] = ctx.unit('article', b, level='A')
+            b.role, b.unit, b.reason = 'article', units[b.doc], '法规条文'
             b.verify = ARTICLE.sub(lambda m: m.group(1) + '　', b.text.strip(), count=1)
 
 
@@ -405,7 +433,7 @@ def detect_dl(ctx: _Ctx) -> None:
         if _local(b.el) in ('dt', 'dd') and b.unit < 0 and b.role in PLAIN + ('heading',):
             groups.setdefault(b.el.getparent(), []).append(b)
     for dl, members in groups.items():
-        u = ctx.unit('dl', level='A', glossary=False)
+        u = ctx.unit('dl', members[0], level='A', glossary=False)
         for b in members:
             b.role, b.unit, b.part, b.reason = 'dl', u, _local(b.el), '原有定义列表'
 
@@ -428,7 +456,7 @@ def detect_lists_of(ctx: _Ctx) -> None:
             c = ctx.nxt(c)
         if len(entries) < 3:
             continue
-        u = ctx.unit(kind, level='A', title=b.text)
+        u = ctx.unit(kind, b, level='A', title=b.text)
         b.role, b.unit, b.part, b.reason = 'loi-head', u, 'head', '插图目录标题' if kind == 'loi' else '表格目录标题'
         for e in entries:
             e.role, e.unit, e.part, e.reason, e.verify = 'loi-entry', u, 'entry', '目录条目', ''
@@ -455,7 +483,7 @@ def detect_tables(ctx: _Ctx) -> None:
         if rows:
             first = ''.join(rows[-1].itertext()).strip()
             if re.match(r'^(合计|总计|共计|Total)', first, re.I):
-                ctx.suggest('table', b, '表格末行是合计行，可移入 tfoot（04 4.13.1.4，需确认）')
+                ctx.suggest('table', b, f'表格末行「{first[:20]}」是合计行，可移入 tfoot（04 4.13.1.4，需确认）', [b])
 
 
 def detect_glossary(ctx: _Ctx) -> None:
@@ -463,16 +491,17 @@ def detect_glossary(ctx: _Ctx) -> None:
     for b in blocks:
         if b.role != 'heading' or not GLOSSARY_TITLE.match(_clean(b.text)):
             continue
-        c, lines = ctx.nxt(b), 0
+        c, lines = ctx.nxt(b), []
         while c is not None and c.role != 'heading':
             if c.role == 'dl':
                 ctx.an.units[c.unit]['glossary'] = True
-            elif TERM_LINE.match(c.text):
-                lines += 1
+            elif c.role == 'para' and c.unit < 0 and TERM_LINE.match(c.text):
+                lines.append(c)
             c = ctx.nxt(c)
         b.attrs['glossary'] = True
-        if lines >= 5:
-            ctx.suggest('glossary', b, f'术语表「{b.text}」是 {lines} 行「词：释义」文本，可转为 dl.glossary（04 4.19.1.8，需确认）')
+        if len(lines) >= 5:
+            ctx.suggest('glossary', b, f'术语表「{b.text}」是 {len(lines)} 行「词：释义」文本，可转为 dl.glossary'
+                                       f'（04 4.19.1.8，需确认）', lines)
 
 
 def detect_script(ctx: _Ctx) -> None:
@@ -488,11 +517,72 @@ def detect_script(ctx: _Ctx) -> None:
         hits = sum(n for name, n in names.items() if n >= 3)
         if hits >= 0.7 * len(paras):
             top = '、'.join(n for n, _ in names.most_common(3))
+            cast = [n for n, k in names.items() if k >= 3]
+            members = [b for b in paras if (m := DIALOGUE.match(b.text)) and m.group(1) in cast or STAGE.fullmatch(b.text)]
             ctx.suggest('script', paras[0], f'{hits}/{len(paras)} 段是「角色名：台词」（{top}…），疑似剧本或问答体；'
-                                            f'需确认后才按 04 §4.9 改写')
+                                            f'确认后按 04 §4.9 写法 B 改写', members, cast=cast)
 
 
-def detect(book: Book, an) -> None:
+# ---------- 用户取舍（确认板） ----------
+
+def _decided(decisions: dict, kind: str, key: str, default: bool) -> bool:
+    items, kinds = decisions.get('items') or {}, decisions.get('kinds') or {}
+    if key in items:
+        return bool(items[key])
+    return bool(kinds.get(kind, default))
+
+
+def _revert(ctx: _Ctx, u: int) -> None:
+    mem = [b for b in ctx.blocks if b.unit == u]
+    ctx.an.units[u].update(lines=[b.text[:60] for b in mem[:4]], count=len(mem), doc=mem[0].doc if mem else '')
+    for b in ctx.blocks:
+        if b.unit == u:
+            b.role, b.unit, b.part, b.verify = ctx.orig[b.idx], -1, '', None
+            b.attrs.pop('indents', None)
+            b.attrs.pop('hang', None)
+            b.reason = '用户确认：不按结构改写'
+    ctx.an.units[u]['rejected'] = True
+
+
+def _free(ctx: _Ctx, idxs: list[int]) -> list:
+    """建议涉及的块里，仍未被别的结构占用的。"""
+    return [ctx.blocks[i] for i in idxs if ctx.blocks[i].unit < 0 and ctx.blocks[i].role in PLAIN]
+
+
+def apply_decisions(ctx: _Ctx, decisions: dict) -> None:
+    for u, info in list(ctx.an.units.items()):
+        if not _decided(decisions, info['kind'], info['key'], True):
+            _revert(ctx, u)
+    for sg in ctx.an.suggestions:
+        if not sg['actionable'] or not _decided(decisions, 's-' + sg['kind'], sg['key'], False):
+            continue
+        sg['applied'] = True
+        blocks = _free(ctx, sg['blocks'])
+        if sg['kind'] == 'poem' and blocks:
+            title = ctx.blocks[sg['title']] if sg.get('title') is not None else None
+            make_poem(ctx, blocks, title, None, 'C')
+        elif sg['kind'] == 'table':
+            ctx.blocks[sg['blocks'][0]].attrs['tfoot'] = True
+        elif sg['kind'] == 'glossary' and blocks:
+            u = ctx.unit('gloss', blocks[0], level='C')
+            for b in blocks:
+                m = TERM_LINE.match(b.text)
+                term = m.group(1)
+                b.role, b.unit, b.part, b.attrs['term'] = 'gloss', u, 'line', term
+                b.verify = term + re.sub(r'^[：:—]+', '', b.text.strip()[len(term):])
+        elif sg['kind'] == 'script' and blocks:
+            u = ctx.unit('script', blocks[0], level='C', cast=sg.get('cast', []))
+            for b in blocks:
+                m = DIALOGUE.match(b.text)
+                if m and m.group(1) in sg.get('cast', []):
+                    name = m.group(1)
+                    b.role, b.unit, b.attrs['persona'] = 'dialogue', u, name
+                    b.verify = name + '：' + b.text.strip()[len(name) + 1:]
+                else:
+                    b.role, b.unit = 'stage', u
+
+
+def detect(book: Book, an, decisions: dict | None = None) -> None:
     ctx = _Ctx(book, an)
     detect_dl(ctx)
     detect_lists_of(ctx)
@@ -502,3 +592,4 @@ def detect(book: Book, an) -> None:
     detect_tables(ctx)
     detect_glossary(ctx)
     detect_script(ctx)
+    apply_decisions(ctx, decisions or {})

@@ -1,17 +1,20 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { api, BUSY } from '../api.js'
 import StatusBadge from '../components/StatusBadge.vue'
 import StatTile from '../components/StatTile.vue'
 import IssueReport from '../components/IssueReport.vue'
 import EpubcheckList from '../components/EpubcheckList.vue'
 import ChangeLog from '../components/ChangeLog.vue'
+import ConfirmBoard from '../components/ConfirmBoard.vue'
 
-const props = defineProps({ id: String })
+const props = defineProps({ id: String, initialTab: { type: String, default: '' } })
 const data = ref(null)
 const rules = ref({})
 const error = ref('')
-const tab = ref('issues')
+const tab = ref(props.initialTab || 'issues')
+// 当前标签页写进地址，刷新后停在原处
+watch(tab, (t) => { history.replaceState(null, '', `#/book/${props.id}${t === 'issues' ? '' : '/' + t}`) })
 let timer
 
 const meta = computed(() => data.value?.meta)
@@ -29,10 +32,10 @@ async function load() {
   if (busy.value) timer = setTimeout(load, 1500)
 }
 
-async function runFix(mode) {
+async function runFix(mode, keepTab = false) {
   try {
     await api.fix(props.id, mode)
-    tab.value = mode === 'rebuild' ? 'rebuild' : 'changes'
+    if (!keepTab) tab.value = mode === 'rebuild' ? 'board' : 'changes'
     await load()
   } catch (e) { error.value = e.message }
 }
@@ -119,6 +122,7 @@ onUnmounted(() => clearTimeout(timer))
           <button :class="{ active: tab === 'issues' }" @click="tab = 'issues'">
             问题清单（{{ fix ? fix.after.total : audit.issues.total }}）</button>
           <button :class="{ active: tab === 'epubcheck' }" @click="tab = 'epubcheck'">epubcheck</button>
+          <button v-if="fix?.rebuild" :class="{ active: tab === 'board' }" @click="tab = 'board'">确认板</button>
           <button v-if="fix?.rebuild" :class="{ active: tab === 'rebuild' }" @click="tab = 'rebuild'">重建详情</button>
           <button v-if="fix" :class="{ active: tab === 'changes' }" @click="tab = 'changes'">修改记录（{{ fix.changes.length }}）</button>
         </div>
@@ -130,6 +134,10 @@ onUnmounted(() => clearTimeout(timer))
         <div v-show="tab === 'epubcheck'">
           <p class="muted small">{{ fix ? '修复后' : '修复前' }}的 EPUBCheck 官方校验结果。</p>
           <EpubcheckList :report="fix ? fix.epubcheck : audit.epubcheck" />
+        </div>
+        <div v-if="fix?.rebuild" v-show="tab === 'board'">
+          <p v-if="fix.decisions_changed" class="notice">决定已保存，正在或等待重新生成。</p>
+          <ConfirmBoard :pid="id" :busy="busy" :stamp="meta.updated" @rebuild="runFix('rebuild', true)" />
         </div>
         <div v-if="fix?.rebuild" v-show="tab === 'rebuild'">
           <p class="muted small">程序识别出的内容类型，以及被删除的内容（书内目录页由导航取代，广告/引流内容、注释区小标题不再需要）。</p>

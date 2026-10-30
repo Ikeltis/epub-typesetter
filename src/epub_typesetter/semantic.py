@@ -301,7 +301,42 @@ def _link_only(el) -> bool:
     return bool(total) and total == linked
 
 
-def analyze(book: Book) -> Analysis:
+# ---------- 确认板：段落样式簇 ----------
+
+# 用户可以整簇改的角色（确认板的选项）；chapter / section 是标题的两档
+REASSIGNABLE = ('para', 'quote', 'center', 'right', 'heading', 'junk', 'meta')
+CLUSTER_ROLES = ('para', 'quote', 'center', 'right', 'chapter', 'section', 'meta', 'junk')
+
+
+def cluster_key(b: Block) -> str:
+    """段落样式簇：原元素、原类名、字号级、粗体、对齐、缩进相同的块归一簇（软件设计建议 §4）。"""
+    return '|'.join((_local(b.el.tag), b.el.get('class') or '', f's{b.size}', 'b' if b.bold else '',
+                     b.align, f'i{int(b.indent)}'))
+
+
+def apply_cluster_roles(blocks: list[Block], clusters: dict[str, str]) -> None:
+    """按用户在确认板上给的整簇角色改写块角色。"""
+    if not clusters:
+        return
+    for b in blocks:
+        role = clusters.get(cluster_key(b))
+        if role is None or b.role not in REASSIGNABLE or role not in CLUSTER_ROLES:
+            continue
+        if b.merged >= 0 and role not in ('chapter', 'section'):    # 合并过的标题拆回两段
+            other = blocks[b.merged]
+            other.role, other.reason = 'para', '用户改为非标题'
+            b.merged = -1
+            b.verify = squash(''.join(b.el.itertext()))
+        if role in ('chapter', 'section'):
+            b.role, b.level, b.attrs['force'] = 'heading', 1 if role == 'chapter' else 2, role
+        else:
+            b.role = role
+        b.reason = f'用户确认：整簇改为 {role}'
+
+
+def analyze(book: Book, decisions: dict | None = None) -> Analysis:
+    """decisions：确认板上的用户决定（clusters 整簇角色、kinds/items 结构取舍），见 board.py。"""
+    decisions = decisions or {}
     blocks = extract_blocks(book)
     toc = _toc_targets(book)
     first_block_of_doc = {}
@@ -485,8 +520,9 @@ def analyze(book: Book) -> Analysis:
             b.role, b.reason = 'keep', f'<{_local(b.el.tag)}> 原样保留'
         elif _local(b.el.tag) == 'blockquote':
             b.role, b.reason = 'quote', '原有 <blockquote>'
+    apply_cluster_roles(blocks, decisions.get('clusters') or {})
     an = Analysis(blocks, toc, noterefs, junk_docs, is_vertical(book))
-    # 9) 成组结构：诗歌、书信、列表、条文、插图目录、表题表注、术语表（structures.py）
+    # 9) 成组结构：诗歌、书信、列表、条文、插图目录、表题表注、术语表（structures.py），再按用户取舍
     from .structures import detect
-    detect(book, an)
+    detect(book, an, decisions)
     return an

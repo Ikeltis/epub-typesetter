@@ -1,0 +1,13 @@
+/* tpl:script（04） */
+p.stage, span.stage{ font-family:"Kaiti SC","STKaiti","KaiTi",serif; font-style:normal; }
+p.stage{ margin:.5em 0; padding-left:2em; text-indent:0; text-align:left; }
+p.stage span.persona{ font-family:initial; }                       /* 角色名不继承楷体【需实测】 */
+span.persona{ font-style:normal; }
+p.speaker-line{ margin:.5em 0 .1em; text-indent:0; text-align:left; }
+p.dialogue{ margin:.1em 0 .4em; padding-left:2em; text-indent:0; }   /* 写法 A：台词整体缩进 2em，回行齐 */
+/* 写法 B：N = 全书最长角色名字数（上限 4），由软件算出后写入下面两处 */
+p.dialogue-run{ padding-left:{N+1}em; text-indent:-{N+1}em; }
+p.dialogue-run > span.persona{ display:inline-block; min-width:{N}em; text-indent:0;
+  text-align:justify; text-align-last:justify; }                    /* 两字名拉开到 N 字宽，对齐【需实测】 */
+section.cast ul{ list-style:none; margin:.5em 0; padding:0; }
+section.cast li{ margin:.3em 0; text-indent:0; text-align:left; }

@@ -25,6 +25,8 @@ export const api = {
   fix: (id, mode = 'basic') => request('POST', `/api/books/${id}/fix?mode=${mode}`),
   remove: (id) => request('DELETE', `/api/books/${id}`),
   addWaiver: (id, waiver) => request('POST', `/api/books/${id}/waivers`, waiver),
+  board: (id) => request('GET', `/api/books/${id}/board`),
+  saveDecisions: (id, d) => request('PUT', `/api/books/${id}/decisions`, d),
   removeWaiver: (id, wid) => request('DELETE', `/api/books/${id}/waivers/${wid}`),
   downloadUrl: (id, which = 'fixed') => `/api/books/${id}/download?which=${which}`,
 }

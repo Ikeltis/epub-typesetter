@@ -224,3 +224,96 @@ def test_rule_alt_text_cleanup():
     img = b.tree('OEBPS/Text/c1.xhtml').getroot().find(f'.//{X}img')
     assert img.get('alt') == '山水'
     assert any(i.rule_id == 'A11Y-015' and i.severity == 'info' for i in rep.after)   # 缺句末标点只提示
+
+
+# ---------- 确认板与用户决定 ----------
+
+from epub_typesetter import board  # noqa: E402
+
+
+def rebuild_with(c1: str, decide, c2: str = '<h1>第二章</h1>' + P):
+    """先按默认重建拿到确认板，decide(board) 返回决定，再按决定重建。"""
+    files = {'OEBPS/Text/c1.xhtml': XHTML11.format(title='第一章', body=c1),
+             'OEBPS/Text/c2.xhtml': XHTML11.format(title='第二章', body=c2), 'OEBPS/Images/cover.jpg': JPEG}
+    src = make_epub(files)
+    b = Book.load(src)
+    rep = optimize(b)
+    bd = board.build(rep.analysis, rep.rebuild.head_kind)
+    dec = board.clean(decide(bd))
+    b = Book.load(src)
+    rep = optimize(b, decisions=dec)
+    data = b.to_bytes()
+    out = Book.load(data)
+    bc = compare_blocks(rep.analysis.blocks, REMOVED_ROLES, out)
+    assert bc.ok, bc.missing
+    if shutil.which('epubcheck'):
+        assert epubcheck.blocking(epubcheck.run_bytes(data)) == 0
+    return out, rep, board.build(rep.analysis, rep.rebuild.head_kind, dec)
+
+
+def test_board_cluster_reassign():
+    c1 = ('<h1>第一章</h1>' + P * 3 + '<p class="yin">引文第一段，内容。</p><p class="yin">引文第二段，内容。</p>'
+          '<p class="yin">引文第三段，内容。</p>' + P + '<p class="ad">扫码关注</p><p class="ad">扫码领书</p>'
+          '<p class="ad">扫码进群</p>' + '<p class="sub">一个小标题</p>' * 1 + P)
+
+    def decide(bd):
+        key = lambda cls: next(c['key'] for c in bd['clusters'] if f'|{cls}|' in c['key'])
+        assert any(c['body'] for c in bd['clusters'])
+        return {'clusters': {key('yin'): 'quote', key('ad'): 'junk', key('sub'): 'section'}}
+    out, rep, bd = rebuild_with(c1, decide)
+    _, bq = find(out, lambda e: e.tag == X + 'blockquote')
+    assert bq is not None and len(bq) == 3
+    assert find(out, lambda e: e.text and '扫码' in e.text)[1] is None
+    assert ('junk', '扫码关注') in rep.rebuild.removed
+    _, h = find(out, lambda e: e.get('class') == 'section-title')
+    assert h is not None and h.text == '一个小标题' and h.tag == X + 'h3'
+
+
+def test_board_reject_structure_and_accept_suggestions():
+    lines = ''.join(f'<p>{n}：台词第{i}句，内容。</p>' for i in range(12) for n in ('铁梅', '李奶奶'))
+    c1 = ('<h1>第一章</h1>' + P + '<p>1.第一。</p><p>2.第二。</p><p>3.第三。</p>' + P +
+          '<p>他不想再说，只是低头，</p><p>未卜三生愿，频添一段愁。</p><p>闷来时敛额，行去几回眸。</p>' + P)
+    c2 = '<h1>第一幕</h1>' + lines + '<p>（幕落）</p>'
+
+    def decide(bd):
+        ol = next(k for k in bd['structures'] if k['kind'] == 'ol')
+        poem = next(s for s in bd['suggestions'] if s['kind'] == 's-poem')
+        script = next(s for s in bd['suggestions'] if s['kind'] == 's-script')
+        assert poem['actionable'] and not poem['applied']
+        return {'kinds': {'ol': False}, 'items': {poem['key']: True, script['key']: True}}
+    out, rep, bd = rebuild_with(c1, decide, c2)
+    assert find(out, lambda e: e.tag == X + 'ol')[1] is None
+    _, p1 = find(out, lambda e: e.tag == X + 'p' and (e.text or '').startswith('1.'))
+    assert p1 is not None                                                   # 拒绝后原样保留序号文字
+    assert find(out, lambda e: 'stanza' in (e.get('class') or ''))[1] is not None
+    path, d = find(out, lambda e: 'dialogue-run' in (e.get('class') or ''))
+    sp = d.find(X + 'span')
+    assert sp.get('class') == 'persona' and sp.text == '铁梅' and sp.tail.startswith('：台词')
+    assert 'z3998:drama' in out.tree(path).getroot().find(f'.//{X}section').get(EPUB_T)
+    assert find(out, lambda e: e.get('class') == 'stage')[1].text == '（幕落）'
+    assert 'min-width:3em' in css(out) and '{N' not in css(out)            # {N} 代入最长角色名字数（李奶奶）
+    assert next(s for s in bd['suggestions'] if s['kind'] == 's-poem')['applied']
+    ol = next(k for k in bd['structures'] if k['kind'] == 'ol')
+    assert ol['items'][0]['accepted'] is False and ol['items'][0]['lines']    # 被拒绝的仍显示样例
+
+
+def test_board_glossary_lines_and_tfoot():
+    terms = ''.join(f'<p>术语{i}：这是第{i}个术语的释义。</p>' for i in range(6))
+    c2 = '<h1>术语表</h1>' + terms
+    c1 = ('<h1>第一章</h1>' + P + '<table><tr><th>项</th><th>数</th></tr><tr><td>甲</td><td>1</td></tr>'
+          '<tr><td>合计</td><td>1</td></tr></table>' + P)
+
+    def decide(bd):
+        return {'kinds': {'s-glossary': True, 's-table': True}}
+    out, rep, _ = rebuild_with(c1, decide, c2)
+    _, dl = find(out, lambda e: e.tag == X + 'dl')
+    assert dl.get('class') == 'glossary' and dl[0].find(X + 'dfn').text == '术语0'
+    assert dl[1].find(X + 'p').text == '这是第0个术语的释义。'
+    _, foot = find(out, lambda e: e.tag == X + 'tfoot')
+    assert foot is not None and foot[0][0].tag == X + 'th' and foot[0][0].get('scope') == 'row'
+
+
+def test_decisions_clean_rejects_garbage():
+    d = board.clean({'clusters': {'a': 'quote', 'b': 'evil'}, 'kinds': {'poem': 'yes'}, 'items': {'x': False},
+                     'extra': 1})
+    assert d == {'version': 1, 'clusters': {'a': 'quote'}, 'kinds': {}, 'items': {'x': False}}

@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .. import __version__, engine, epubcheck
+from .. import __version__, board, engine, epubcheck
 from ..waivers import WaiverFileError, WaiverSet
 from . import jobs, store
 
@@ -140,6 +140,29 @@ def delete_waiver(pid: str, wid: str):
         raise HTTPException(404, '找不到这条豁免')
     ws.save(store.path(pid, 'waivers.json'))
     jobs.rescore(pid)
+
+
+@app.get('/api/books/{pid}/board')
+def get_board(pid: str):
+    """确认板：上次排版重建时识别出的段落样式簇、结构、建议，以及用户已保存的决定。"""
+    _meta_or_404(pid)
+    data = store.read_json(pid, 'board.json')
+    if data is None:
+        raise HTTPException(404, '还没有确认板，请先做一次排版重建')
+    return {**data, 'decisions': board.load(store.path(pid, 'decisions.json'))}
+
+
+@app.put('/api/books/{pid}/decisions')
+def put_decisions(pid: str, body: dict):
+    """保存确认板上的决定；下次排版重建时生效（前端保存后会直接触发重建）。"""
+    _idle_or_409(pid)
+    d = board.clean(body)
+    store.write_json(pid, 'decisions.json', d)
+    f = store.read_json(pid, 'fix.json')
+    if f is not None:
+        f['decisions_changed'] = True
+        store.write_json(pid, 'fix.json', f)
+    return d
 
 
 @app.get('/api/books/{pid}/download')

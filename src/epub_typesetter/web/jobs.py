@@ -5,7 +5,7 @@ import os
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 
-from .. import engine, epubcheck, report
+from .. import board, engine, epubcheck, report
 from ..book import NS, Book, EpubError
 from ..pipeline import optimize
 from ..rebuild import REMOVED_ROLES
@@ -133,7 +133,9 @@ def fix(pid: str, mode: str = 'basic') -> None:
     ws = load_waivers(pid)
     result = {'mode': mode}
     if mode == 'rebuild':
-        orep = optimize(book, waivers=ws)
+        decisions = board.load(store.path(pid, 'decisions.json'))
+        orep = optimize(book, waivers=ws, decisions=decisions)
+        store.write_json(pid, 'board.json', board.build(orep.analysis, orep.rebuild.head_kind, decisions))
         rep = engine.FixReport(orep.fix.changes + orep.refix.changes, orep.fix.before, orep.refix.after,
                                orep.fix.skipped + orep.refix.skipped)
         out = book.to_bytes()

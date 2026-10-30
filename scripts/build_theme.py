@@ -37,7 +37,7 @@ out = ('/* epub-typesetter 默认主题。由 scripts/build_theme.py 从 guide/0
 print(f'default.css {len(out)} 字节')
 
 # 按需模板：04 各节 CSS 块里以 /* tpl:名字 */ 开头的片段，重建时只追加用到的（04 附录 B.2 第 2 条）
-WANTED = ('poem', 'poem-pagebreak', 'letter', 'article', 'list', 'figure', 'loi', 'table', 'glossary')
+WANTED = ('poem', 'poem-pagebreak', 'letter', 'script', 'article', 'list', 'figure', 'loi', 'table', 'glossary')
 tpl_dir = ROOT / 'src/epub_typesetter/themes'
 for old in tpl_dir.glob('tpl-*.css'):
     old.unlink()

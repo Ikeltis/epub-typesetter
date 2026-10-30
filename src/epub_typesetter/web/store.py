@@ -7,6 +7,8 @@
                    fix.json        修复报告
                    waivers.json    按书豁免（guide/07 §7 格式）
                    fixed.renames.json  修复时的改名链（原路径 → 输出路径），豁免据此匹配输出文件
+                   board.json      确认板（排版重建时生成）
+                   decisions.json  用户在确认板上的决定（排版重建时读取）
 
 不使用用户提供的文件名作路径，id 由服务端生成。
 """

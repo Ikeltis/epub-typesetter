@@ -93,3 +93,21 @@ def test_waiver_endpoints(client):
     assert client.delete(f'/api/books/{pid}/waivers/w-001').status_code == 204
     d = client.get(f'/api/books/{pid}').json()
     assert next(i for i in d['audit']['issues']['issues'] if i['rule_id'] == 'STR-004')['status'] == 'open'
+
+
+def test_board_endpoints(client):
+    pid = client.post('/api/books', files={'file': ('测试书.epub', make_epub(), 'application/epub+zip')}).json()['id']
+    wait(client, pid)
+    assert client.get(f'/api/books/{pid}/board').status_code == 404              # 还没重建
+    client.post(f'/api/books/{pid}/fix?mode=rebuild')
+    wait(client, pid, done=('fixed', 'error'))
+    bd = client.get(f'/api/books/{pid}/board').json()
+    assert bd['clusters'] and bd['decisions']['clusters'] == {}
+    key = bd['clusters'][0]['key']
+    r = client.put(f'/api/books/{pid}/decisions', json={'clusters': {key: 'quote'}})
+    assert r.status_code == 200 and r.json()['clusters'] == {key: 'quote'}
+    assert client.get(f'/api/books/{pid}').json()['fix']['decisions_changed']
+    client.post(f'/api/books/{pid}/fix?mode=rebuild')
+    d = wait(client, pid, done=('fixed', 'error'))
+    assert d['meta']['status'] == 'fixed' and not d['fix'].get('decisions_changed')
+    assert client.get(f'/api/books/{pid}/board').json()['decisions']['clusters'] == {key: 'quote'}

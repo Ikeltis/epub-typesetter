@@ -50,7 +50,7 @@ TYPE_BY_TITLE = [
     (re.compile(r'^(参考文献|参考书目)'), 'bibliography', 'doc-bibliography'),
     (re.compile(r'^(术语表|名词解释|词汇表|译名对照|人名对照|名词对照)'), 'glossary', 'doc-glossary'),
 ]
-TEMPLATE_ORDER = ('poem', 'letter', 'article', 'list', 'figure', 'loi', 'table', 'glossary')
+TEMPLATE_ORDER = ('poem', 'letter', 'script', 'article', 'list', 'figure', 'loi', 'table', 'glossary')
 WS_LEAD = ' \t\r\n\u3000\u00a0\u2002\u2003'
 PAGE_TAIL = re.compile(r'[\s.．·…⋯—_-]*\d+\s*$')
 
@@ -81,6 +81,7 @@ class RebuildReport:
     notes: int = 0
     log: list[str] = field(default_factory=list)
     structures: Counter = field(default_factory=Counter)          # 输出的成组结构：(类别, 置信级) → 个数
+    head_kind: dict = field(default_factory=dict)                 # 标题块序号 → part / chapter / sub（确认板显示用）
     suggestions: list[dict] = field(default_factory=list)         # 只建议、没改的（C 级识别、对不上的目录条目）
 
 
@@ -88,9 +89,12 @@ def theme_css(name: str = 'default') -> bytes:
     return resources.files('epub_typesetter').joinpath(f'themes/{name}.css').read_bytes()
 
 
-def template_css(name: str) -> str:
-    """04 的按需模板（scripts/build_theme.py 生成）；含 {N} 占位的悬挂变体行我们不输出，去掉。"""
+def template_css(name: str, n: int | None = None) -> str:
+    """04 的按需模板（scripts/build_theme.py 生成）。{N} 占位（悬挂宽度）给了 n 就代入，否则那几行不输出。"""
     css = resources.files('epub_typesetter').joinpath(f'themes/tpl-{name}.css').read_text(encoding='utf-8')
+    if n is not None:
+        for k, v in (('{N+1}', n + 1), ('{N-1}', n - 1), ('{N}', n)):
+            css = css.replace(k, str(v))
     return '\n'.join(ln for ln in css.splitlines() if '{N' not in ln)
 
 
@@ -223,7 +227,13 @@ class Rebuilder:
         in_part = False
         cur_n = 2
         for h in heads:
-            if part_level is not None and h.level == part_level and PART_RE.match(h.text):
+            force = h.attrs.get('force')                # 确认板上用户指定的章、节
+            if force == 'chapter':
+                cur_n = 3 if in_part else 2
+                self.head_out[h.idx] = (cur_n, 'chapter-title', 'chapter')
+            elif force == 'section':
+                self.head_out[h.idx] = (min(cur_n + 1, 6), 'section-title', 'sub')
+            elif part_level is not None and h.level == part_level and PART_RE.match(h.text):
                 self.head_out[h.idx] = (2, 'part-title', 'part')
                 in_part, cur_n = True, 2
             elif h.level <= chapter_level:
@@ -623,7 +633,7 @@ class Rebuilder:
                     i += 1
                     continue
                 b.role = 'para'                       # 没被引用的注（孤注）：按普通段落保留
-            if b.role in ('poem', 'letter', 'ol', 'dl') and b.unit >= 0:
+            if b.role in ('poem', 'letter', 'ol', 'dl', 'gloss') and b.unit >= 0:
                 j = i
                 while j < len(blocks) and blocks[j].unit == b.unit and blocks[j].role == b.role:
                     j += 1
@@ -719,6 +729,12 @@ class Rebuilder:
                 e.set('id', f'h{self.heading_no}')     # 稳定 id，供 nav 定位；原有锚点由 _anchors 另加
             elif b.role in ('caption',):              # 没跟在图后面的图注：居中小字
                 e = _el('p', {'class': 'align-center small'})
+            elif b.role in ('dialogue', 'stage'):     # 剧本（用户确认后，04 §4.9 写法 B）
+                e = self._script_para(b)
+                self._anchors(b, e)
+                sec.append(e)
+                i += 1
+                continue
             elif b.role == 'item':                    # 中文序号项（04 4.10.2）
                 e = _el('p', {'class': f'item hang-{b.attrs.get("hang", 2)}'})
                 self.tpl_used.add('article')
@@ -761,6 +777,8 @@ class Rebuilder:
         if ch.epub_type == 'glossary':
             for dl in sec.iter(X + 'dl'):
                 self._glossary_dl(dl)
+        if sec is not body and any('dialogue' in (p.get('class') or '') for p in sec.iter(X + 'p')):
+            sec.set(EPUB + 'type', f'{sec.get(EPUB + "type")} z3998:drama')   # 剧本是书的一部分（04 4.9.1.1）
         self._declare_prefix(html)
         return html
 
@@ -888,6 +906,41 @@ class Rebuilder:
             ol.append(li)
         return ol
 
+    def _script_para(self, b: Block) -> etree._Element:
+        self.tpl_used.add('script')
+        self.cur_doc = b.doc
+        if b.role == 'stage':
+            e = _el('p', {'class': 'stage', EPUB + 'type': 'z3998:stage-direction'})
+            self.inline(b.el, e)
+            return e
+        name = b.attrs['persona']
+        self.persona_len = max(getattr(self, 'persona_len', 2), min(4, len(name)))
+        e = _el('p', {'class': 'dialogue dialogue-run'})
+        sp = _el('span', {'class': 'persona', EPUB + 'type': 'z3998:persona'}, name)
+        e.append(sp)
+        body = _el('p')
+        self.inline(b.el, body, re.compile('^' + re.escape(name) + '[：:　]'))
+        sp.tail = '：' + (body.text or '')
+        for c in list(body):
+            e.append(c)
+        return e
+
+    def _render_gloss(self, group: list[Block]) -> etree._Element:
+        """用户确认的「词：释义」成行文本 → dl.glossary（04 4.19.1.8）。"""
+        self.rep.structures[('术语表条目', 'C')] += 1
+        dl = _el('dl')
+        for b in group:
+            term = b.attrs['term']
+            dt = _el('dt')
+            dt.append(_el('dfn', None, term))
+            dd = _el('dd')
+            self.cur_doc = b.doc
+            self.inline(b.el, dd, re.compile('^' + re.escape(term) + '[：:—]+'))
+            self._anchors(b, dt)
+            dl.extend([dt, dd])
+        self._glossary_dl(dl)
+        return dl
+
     def _render_dl(self, group: list[Block]) -> etree._Element:
         info = self.an.units[group[0].unit]
         self.tpl_used.add('list')
@@ -967,6 +1020,20 @@ class Rebuilder:
         for t in tables:
             for line in rebuild_table(t):
                 self.rep.structures[(f'表格：{line}', 'A')] += 1
+        if b.attrs.get('tfoot'):                      # 用户确认：末行合计移入 tfoot（04 4.13.1.4）
+            t = tables[0]
+            rows = t.findall('.//' + X + 'tr')
+            if rows and rows[-1].getparent().tag == X + 'tbody':
+                last = rows[-1]
+                foot = _el('tfoot')
+                t.append(foot)
+                foot.append(last)
+                cell = next((c for c in last if c.tag in (X + 'td', X + 'th')), None)
+                if cell is not None:
+                    cell.tag = X + 'th'
+                    cell.set('scope', 'row')
+                    cell.attrib.pop('class', None)
+                self.rep.structures[('表格：合计行移入 tfoot', 'C')] += 1
         if prev is not None and prev.role == 'table-caption' and prev.group == b.idx:
             cap = _el('caption')
             self.cur_doc = prev.doc
@@ -1074,7 +1141,8 @@ class Rebuilder:
             self.rep.log.append('保留整本竖排（追加 vertical 样式）')
         for name in TEMPLATE_ORDER:                   # 只追加用到的模板（04 附录 B.2 第 2 条）
             if name in self.tpl_used:
-                css += b'\n' + template_css(name).encode('utf-8') + b'\n'
+                n = getattr(self, 'persona_len', 2) if name == 'script' else None   # 写法 B 的悬挂宽度
+                css += b'\n' + template_css(name, n).encode('utf-8') + b'\n'
         if self.tpl_used:
             self.rep.log.append('追加模板样式：' + '、'.join(n for n in TEMPLATE_ORDER if n in self.tpl_used))
         self.rep.suggestions = self.an.suggestions + self.rep.suggestions
@@ -1112,6 +1180,7 @@ class Rebuilder:
         for sid in spine_ids:
             etree.SubElement(spine, '{%s}itemref' % NS['opf'], {'idref': sid})
 
+        self.rep.head_kind = {i: k for i, (_, _, k) in self.head_out.items()}
         self._rebuild_nav(trees, cover_item is not None)
         book.mark_dirty(book.opf_path)
         self.rep.log.append(f'重建 {len(chapters)} 个文件，注释 {self.rep.notes} 条，删除 {len(self.rep.removed)} 块')

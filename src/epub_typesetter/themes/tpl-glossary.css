@@ -1,0 +1,5 @@
+/* tpl:glossary（04） */
+dl.glossary{ margin:1em 0; }
+dl.glossary dt{ margin-top:1em; font-weight:bold; text-indent:0; }
+dl.glossary dd{ margin:.2em 0 0 2em; text-indent:0; }
+dl.glossary dd p{ text-indent:0; }

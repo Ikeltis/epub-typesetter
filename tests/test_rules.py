@@ -100,12 +100,15 @@ def test_empty_paragraphs_removed_but_anchor_kept():
     assert [p.get('id') or ''.join(p.itertext()) for p in ps] == ['甲', 'keep', '乙']
 
 
-def test_img_alt_from_figcaption():
+def test_img_alt_not_copied_from_figcaption():
+    """04 4.11.2.5（D8）：缺 alt 一律补空串，不抄图注；alt 是文件名也清空；有图注的空 alt 报「待补描述」。"""
     body = ('<h1>二</h1><figure><img src="../Images/cover.jpg"/><figcaption>图 1\u3000山水</figcaption></figure>'
-            '<p><img src="../Images/cover.jpg"/></p>')
-    b, _ = fixed(make_epub({'OEBPS/Text/c2.xhtml': XHTML11.format(title='二', body=body)}))
+            '<p><img src="../Images/cover.jpg"/></p><p><img src="../Images/cover.jpg" alt="cover.jpg"/></p>')
+    b, rep = fixed(make_epub({'OEBPS/Text/c2.xhtml': XHTML11.format(title='二', body=body)}))
     alts = [i.get('alt') for i in b.tree('OEBPS/Text/c2.xhtml').getroot().iter(f'{X}img')]
-    assert alts == ['图 1\u3000山水', '']
+    assert alts == ['', '', '']
+    pending = [i for i in rep.after if i.rule_id == 'A11Y-001']
+    assert pending and pending[0].severity == 'info' and len(pending[0].hits) == 1
 
 
 def test_invisible_chars_removed_but_pre_kept():

@@ -24,6 +24,7 @@ p.source{ margin:.2em 0 1em; font-size:.85em; line-height:1.5; text-indent:0; te
 p.meta{ margin:.3em 0; text-indent:0; text-align:left; }                                     /* 版权页键值行 */
 ul.bullets{ list-style-type:disc; }
 img.glyph{ height:1em; width:auto; vertical-align:-.1em; margin:0 .05em; }  /* 行内图片字、生僻字（04 §4.16） */
+figcaption p{ margin:.2em 0; text-indent:0; }                                 /* 多段图注（04 4.11.3.5） */
 section.cover-page{ margin:0; padding:0; text-align:center; text-indent:0; }
 section.cover-page img{ max-width:100%; max-height:100vh; }                  /* 04 §4.14；vh 需实测 */
 /* 原书有语义的颜色（批语、强调）映射为 accent；03 默认不写死颜色，这是唯一例外，并给夜间模式配色 */
@@ -34,3 +35,17 @@ out = ('/* epub-typesetter 默认主题。由 scripts/build_theme.py 从 guide/0
        + base + '\n\n' + notes + '\n\n' + extra + '\n')
 (ROOT / 'src/epub_typesetter/themes/default.css').write_text(out, encoding='utf-8')
 print(f'default.css {len(out)} 字节')
+
+# 按需模板：04 各节 CSS 块里以 /* tpl:名字 */ 开头的片段，重建时只追加用到的（04 附录 B.2 第 2 条）
+WANTED = ('poem', 'poem-pagebreak', 'letter', 'article', 'list', 'figure', 'loi', 'table', 'glossary')
+tpl_dir = ROOT / 'src/epub_typesetter/themes'
+for old in tpl_dir.glob('tpl-*.css'):
+    old.unlink()
+n = 0
+for block in re.findall(r'```css\n(.*?)```', G04, re.S):
+    parts = re.split(r'^/\* tpl:([\w-]+)[^*]*\*/\n', block, flags=re.M)
+    for name, css in zip(parts[1::2], parts[2::2]):
+        if name in WANTED:
+            (tpl_dir / f'tpl-{name}.css').write_text(f'/* tpl:{name}（04） */\n{css.strip()}\n', encoding='utf-8')
+            n += 1
+print(f'模板 {n} 个')

@@ -14,6 +14,9 @@
   right      右对齐短行（落款）        center    居中短行
   keep       表格、pre 等原样保留的块
   note-cont  多段注的续段               heading-merged 已并入相邻标题的块（章号、章名各成标题时）
+  poem / letter / dl / ol    成组结构（同组 unit 相同，part 是组内角色），见 structures.py
+  item / article             中文序号项、法规条文（04 §4.10）
+  loi-head / loi-entry       插图（表格）目录页        table-caption / table-note  表题、表注
 """
 from __future__ import annotations
 
@@ -70,6 +73,12 @@ class Block:
     group: int = -1                                     # caption/source 归属的 figure 块序号
     merged: int = -1                                    # 与本标题合并的另一个标题块（章号 + 章名，04 §4.3）
     ordinal_first: bool = True                          # 合并后先输出哪一块：章号块在前
+    indent: float = 0                                   # 段首空格缩进的字宽（规范修复删掉的也算）
+    gap_before: bool = False                            # 前面紧挨着被跳过的空段（诗节、场景分隔的线索）
+    unit: int = -1                                      # 成组结构的编号（诗、信、列表…），见 Analysis.units
+    part: str = ''                                      # 组内角色：title / line / salutation / signature …
+    attrs: dict = field(default_factory=dict)           # 组内补充信息（缩进级、序号、悬挂宽度…）
+    verify: str | None = None                           # 文字校验用的期望文字（重建有意改写时，如删去手写序号）
 
     def short(self, n=30) -> str:
         return self.text[:n]
@@ -82,6 +91,8 @@ class Analysis:
     noterefs: dict[int, list[etree._Element]]           # note 块序号 → 指向它的 <a>
     junk_docs: set[str]
     vertical: bool = False                              # 整本竖排（重建时要保留）
+    units: dict[int, dict] = field(default_factory=dict)   # 成组结构：编号 → {kind, level(A/B), …}
+    suggestions: list[dict] = field(default_factory=list)  # 只给建议、不自动改的识别结果（C 级，04 各节「识别信号」）
 
     def counts(self) -> Counter:
         return Counter(b.role if b.role != 'heading' else f'h{b.level}' for b in self.blocks)
@@ -197,6 +208,16 @@ def _has_block_child(el) -> bool:
     return any(_is_block(c) for c in el.iterdescendants())
 
 
+_LEAD_WS = re.compile(r'^[ \t\r\n]*([\u3000\u00a0\u2002\u2003]+)')
+
+
+def _indent_of(book: Book, el) -> float:
+    """段首缩进字宽：还留在文字里的，或规范修复（TYP-001）删掉时记下的。"""
+    from .rules.text import indent_width
+    m = _LEAD_WS.match(''.join(el.itertext()))
+    return indent_width(m.group(1)) if m else book.removed_indent.get(el, 0)
+
+
 def extract_blocks(book: Book) -> list[Block]:
     classes = class_styles(book)
     blocks: list[Block] = []
@@ -209,6 +230,7 @@ def extract_blocks(book: Book) -> list[Block]:
             continue
         # 链接可能指向文件本身（body/html 上的 id），它们归属文件的第一块
         pending: list[str] = [x for x in (root.get('id'), body.get('id')) if x]
+        gap = [False]
 
         def walk(el):
             for ch in el:
@@ -224,18 +246,24 @@ def extract_blocks(book: Book) -> list[Block]:
                                     for d in ch.iter())
                     if not text and not has_media and ch.tag not in ATOMIC:
                         pending.extend(ids)       # 空块（如 <p id=x/>）当锚点用
+                        gap[0] = True
                         continue
-                    blocks.append(Block(len(blocks), it.path, ch, text, pending + ids, size, bold, align))
+                    blocks.append(Block(len(blocks), it.path, ch, text, pending + ids, size, bold, align,
+                                        indent=_indent_of(book, ch), gap_before=gap[0]))
                     pending.clear()
+                    gap[0] = False
                 elif _is_block(ch):
                     if ch.get('id'):
                         pending.append(ch.get('id'))
                     walk(ch)
                 else:
-                    # 块外的行内元素：空锚点（<span id=x/>）或游离文字（少见，作为段落）
+                    # 块外的行内元素：空锚点（<span id=x/>）、游离文字（少见，作为段落）、
+                    # 或与段落并列放在容器里的图片（<div><img/><p>图注</p></div>）——图片必须成块，否则会丢
                     text = squash(''.join(ch.itertext()))
                     ids = [d.get('id') for d in ch.iter() if isinstance(d.tag, str) and d.get('id')]
-                    if not text:
+                    has_media = any(isinstance(d.tag, str) and _local(d.tag) in ('img', 'svg', 'image')
+                                    for d in ch.iter())
+                    if not text and not has_media:
                         pending.extend(ids)
                     else:
                         size, bold, align = _visual(ch, classes)
@@ -406,6 +434,17 @@ def analyze(book: Book) -> Analysis:
     for b in blocks:
         if b.role != 'figure' or _local(b.el.tag) == 'figure':   # 原有 <figure> 自带图注，不再拼接
             continue
+        # 图片与几段文字同在一个图片容器里（<div class="…image"><img/><p>题</p><p>说明</p></div>）：
+        # 容器里图后的文字段都是图注（04 4.11.3.5：多段图注每段一个 p）
+        box = b.el.getparent() if _local(b.el.tag) in ('img', 'svg') else None
+        if box is not None and _local(box.tag) in ('div', 'figure') and \
+                all(_local(c.tag) in ('img', 'svg', 'p', 'span', 'br') for c in box if isinstance(c.tag, str)):
+            j = b.idx + 1
+            while j < len(blocks) and blocks[j].el.getparent() is box and blocks[j].role == 'para':
+                blocks[j].role, blocks[j].group, blocks[j].reason = 'caption', b.idx, '与图同在图片容器里的图注'
+                j += 1
+            if j > b.idx + 1:
+                continue
         j = b.idx + 1
         if j < len(blocks) and blocks[j].role == 'para' and len(blocks[j].text) <= 80 and blocks[j].doc == b.doc and \
                 (CAPTION_RE.match(blocks[j].text) or blocks[j].align == 'center' and blocks[j].size <= 3):
@@ -446,4 +485,8 @@ def analyze(book: Book) -> Analysis:
             b.role, b.reason = 'keep', f'<{_local(b.el.tag)}> 原样保留'
         elif _local(b.el.tag) == 'blockquote':
             b.role, b.reason = 'quote', '原有 <blockquote>'
-    return Analysis(blocks, toc, noterefs, junk_docs, is_vertical(book))
+    an = Analysis(blocks, toc, noterefs, junk_docs, is_vertical(book))
+    # 9) 成组结构：诗歌、书信、列表、条文、插图目录、表题表注、术语表（structures.py）
+    from .structures import detect
+    detect(book, an)
+    return an

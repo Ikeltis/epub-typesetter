@@ -1,0 +1,11 @@
+/* tpl:letter（04） */
+.letter{ margin:1.2em 0; }
+section.letter > .letter-title{ margin:1em 0 .8em; font-size:1.15em; text-align:center; }
+.letter-date{ margin-left:.5em; font-size:.75em; font-family:"Kaiti SC","STKaiti","KaiTi",serif; }
+.letter p.dateline{ margin:.5em 0; text-indent:0; text-align:right; }
+.letter p.salutation{ margin:.5em 0; text-indent:0; text-align:left; }       /* 称谓顶格 */
+.letter p.closing{ margin:.2em 0 .5em; text-indent:0; text-align:left; }     /* 祝颂语下句顶格 */
+.letter p.signature{ margin:.5em 2em .2em 0; text-indent:0; text-align:right; }   /* 署名右齐，右缩 2em */
+.letter p.date{ margin:.2em 0 .5em; text-indent:0; text-align:right; }
+.letter p.postscript, .letter div.postscript{ margin-top:1em; text-align:left; }
+.letter + p{ margin-top:.8em; }

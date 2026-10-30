@@ -1,0 +1,36 @@
+/* tpl:poem（04） */
+.poem, .poem-quote{ margin:.75em 0; }
+.poem p.stanza, .poem-quote p.stanza{ margin:0 0 .9em; text-indent:0; text-align:left; line-height:1.6;
+  font-family:"STFangsong","FangSong",serif; }           /* 诗用仿宋（03 §8）；行高 ≥1.4 */
+.poem.kaiti p.stanza, .poem-quote.kaiti p.stanza{ font-family:"Kaiti SC","STKaiti","KaiTi",serif; }   /* 需要楷体时在容器加 kaiti */
+.poem span.line, .poem-quote span.line{ display:block; }
+.poem p.stanza > br, .poem-quote p.stanza > br{ display:none; }   /* 行已是块；br 只为去样式后仍分行 */
+.poem p.poem-title, .poem-quote p.poem-title{ margin:1em 0 .3em; text-indent:0; text-align:left;
+  font-family:"Source Han Sans SC","Noto Sans CJK SC","PingFang SC","Microsoft YaHei","SimHei",sans-serif; }
+.poem p.poem-author, .poem-quote p.poem-author,
+.poem p.poem-preface, .poem-quote p.poem-preface{ margin:0 0 .6em; text-indent:0; text-align:left; font-size:.875em;
+  font-family:"Kaiti SC","STKaiti","KaiTi",serif; }
+.poem p.attribution, .poem-quote p.attribution{ margin:.6em 2em .3em 0; font-family:inherit; }
+
+/* 居中型 */
+.poem-center p.stanza, .poem-center p.poem-title, .poem-center p.poem-author{ text-align:center; }
+/* 居左型：首行 2em，回行 3em */
+.poem-left span.line{ padding-left:3em; text-indent:-1em; }
+.poem-left p.poem-title, .poem-left p.poem-author, .poem-left p.poem-preface{ padding-left:2em; }
+.poem-quote.poem-left span.line{ padding-left:1em; text-indent:-1em; }        /* 引诗已在 blockquote 内缩进 */
+.poem-quote.poem-left p.poem-title, .poem-quote.poem-left p.poem-author{ padding-left:0; }
+/* 词曲型：整句缩进，不悬挂 */
+.poem-ci span.line{ padding-left:2em; text-indent:0; }
+.poem-ci p.poem-title, .poem-ci p.poem-author, .poem-ci p.poem-preface{ padding-left:2em; }
+.poem-quote.poem-ci span.line{ padding-left:0; }
+.poem-quote.poem-ci p.poem-title, .poem-quote.poem-ci p.poem-author, .poem-quote.poem-ci p.poem-preface{ padding-left:0; }
+span.ci-gap{ display:inline-block; width:2em; }                              /* 同行两阕的间隔 */
+/* 自适应换行：分句作为整体，窄屏在分句间换行 */
+.poem-adaptive span.verse{ display:inline-block; max-width:100%; text-align:left; }
+/* 缩进：用 margin，叠加在各型基础缩进之上 */
+.poem span.line.indent-1, .poem-quote span.line.indent-1{ margin-left:1em; }
+.poem span.line.indent-2, .poem-quote span.line.indent-2{ margin-left:2em; }
+.poem span.line.indent-3, .poem-quote span.line.indent-3{ margin-left:3em; }
+/* 引诗省略行 */
+.poem span.line.elision, .poem-quote span.line.elision{ padding-left:3em; text-indent:0; }
+.poem-center span.line.elision{ padding-left:0; text-align:center; }

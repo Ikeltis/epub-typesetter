@@ -1,0 +1,2 @@
+/* tpl:poem-pagebreak（04） */
+article.poem{ break-after:page; page-break-after:always; }

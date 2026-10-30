@@ -117,7 +117,12 @@ def rescore(pid: str) -> None:
 ROLE_NAMES = {'h1': '一级标题', 'h2': '二级标题', 'h3': '三级标题', 'para': '正文段落', 'figure': '插图',
               'caption': '图注', 'source': '资料来源', 'bullet': '列表项', 'note': '注释', 'note-head': '注释小标题',
               'toc': '书内目录页', 'junk': '广告/引流', 'meta': '版权信息', 'quote': '引文', 'right': '右对齐短行',
-              'center': '居中短行', 'keep': '表格等原样保留'}
+              'center': '居中短行', 'keep': '表格等原样保留', 'poem': '诗歌', 'letter': '书信', 'ol': '有序列表项',
+              'dl': '定义列表', 'item': '序号项', 'article': '条文', 'loi-head': '插图/表格目录标题',
+              'loi-entry': '插图/表格目录条目', 'table-caption': '表题', 'table-note': '表注', 'note-cont': '注释续段',
+              'heading-merged': '已并入标题', 'h4': '四级标题', 'h5': '五级标题', 'h6': '六级标题'}
+SUGGEST_NAMES = {'poem': '诗歌', 'letter': '书信', 'loi': '插图目录', 'lot': '表格目录', 'table': '表格',
+                 'glossary': '术语表', 'script': '剧本对白'}
 
 
 def fix(pid: str, mode: str = 'basic') -> None:
@@ -143,6 +148,11 @@ def fix(pid: str, mode: str = 'basic') -> None:
             'vertical': orep.analysis.vertical,
             'removed': [{'role': r, 'name': ROLE_NAMES.get(r, r), 'text': t[:120]} for r, t in orep.rebuild.removed[:300]],
             'removed_total': len(orep.rebuild.removed),
+            'structures': [{'name': k, 'level': lv, 'count': n}
+                           for (k, lv), n in sorted(orep.rebuild.structures.items(), key=lambda x: -x[1])],
+            'suggestions': [{'kind': x['kind'], 'name': SUGGEST_NAMES.get(x['kind'], x['kind']), 'text': x['text']}
+                            for x in orep.rebuild.suggestions[:200]],
+            'suggestions_total': len(orep.rebuild.suggestions),
         }
     else:
         rep = engine.fix(book, waivers=ws)

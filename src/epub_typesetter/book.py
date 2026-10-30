@@ -133,6 +133,8 @@ class Book:
         self._trees: dict[str, etree._ElementTree] = {}
         self._dirty: set[str] = set()
         self.origins: dict[str, set[str]] = {}    # 当前路径 → 输入书里的原路径（改名、拆分后用于匹配豁免）
+        # 规范修复删掉的段首空格缩进（元素 → 字宽）：诗行的相对缩进要靠它还原成 indent-N（04 4.7.2.4）
+        self.removed_indent: dict = {}
         self.opf_path = self._find_opf()
 
     # ---------- 读取 ----------

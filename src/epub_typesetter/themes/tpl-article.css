@@ -1,0 +1,12 @@
+/* tpl:article（04） */
+p.article{ margin:.5em 0; }                                       /* 默认：首行缩进 2em，回行顶格 */
+p.article-hang{ margin:.5em 0 .5em {N}em; text-indent:-{N}em; }  /* 悬挂变体；N 由软件按全书计算 */
+p.article-hang > span.article-no{ display:inline-block; min-width:{N-1}em; text-indent:0; }
+p.article-hang.article-cont{ text-indent:0; }
+p.item{ margin:.3em 0; }
+p.hang-2{ margin-left:2em; text-indent:-2em; }
+p.hang-3{ margin-left:3em; text-indent:-3em; }
+p.hang-4{ margin-left:4em; text-indent:-4em; }
+p.item-sub.hang-2{ margin-left:5em; }
+p.item-sub.hang-3{ margin-left:6em; }
+p.item > span.item-no{ display:inline-block; min-width:2em; text-indent:0; }

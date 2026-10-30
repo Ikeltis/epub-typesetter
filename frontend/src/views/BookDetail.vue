@@ -133,6 +133,21 @@ onUnmounted(() => clearTimeout(timer))
         </div>
         <div v-if="fix?.rebuild" v-show="tab === 'rebuild'">
           <p class="muted small">程序识别出的内容类型，以及被删除的内容（书内目录页由导航取代，广告/引流内容、注释区小标题不再需要）。</p>
+          <template v-if="fix.rebuild.structures?.length">
+            <h3 style="margin-top:0">按模板改写的结构</h3>
+            <p class="muted small">A：原书已标明，只做结构转换；B：按规范的识别信号自动改写（04 各节「识别信号」）。</p>
+            <table style="width:auto; min-width:240px; margin-bottom:16px">
+              <thead><tr><th>结构</th><th>置信</th><th>数量</th></tr></thead>
+              <tbody><tr v-for="(r, i) in fix.rebuild.structures" :key="i"><td>{{ r.name }}</td><td class="mono">{{ r.level }}</td><td class="mono">{{ r.count }}</td></tr></tbody>
+            </table>
+          </template>
+          <template v-if="fix.rebuild.suggestions?.length">
+            <h3>建议（未自动修改，{{ fix.rebuild.suggestions_total }} 条）</h3>
+            <p class="muted small">识别把握不够（C 级）或规范要求用户确认的地方，原样保留。</p>
+            <table style="margin-bottom:16px"><tbody>
+              <tr v-for="(s, i) in fix.rebuild.suggestions" :key="i"><td style="width:90px"><span class="badge">{{ s.name }}</span></td><td class="small">{{ s.text }}</td></tr>
+            </tbody></table>
+          </template>
           <div class="row" style="align-items:flex-start; gap:24px">
             <table style="width:auto; min-width:240px">
               <thead><tr><th>内容类型</th><th>数量</th></tr></thead>

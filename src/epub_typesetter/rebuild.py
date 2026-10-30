@@ -9,7 +9,10 @@
 - 书内目录页、注释区小标题、广告页删除（全部记录在 RebuildReport.removed，供文字校验与界面展示）；
 - 重新生成封面页、nav、NCX。
 
-表格、pre 等无法安全改写的块原样保留。
+- 成组结构（structures.py 识别）：诗歌、书信、有序列表、定义列表与术语表、中文序号项、条文、
+  插图（表格）目录、表题表注，按 04 §4.7–4.13、4.19 的模板输出；只追加用到的模板样式。
+
+表格做结构规范化（tables.py）后保留内容；pre 等无法安全改写的块原样保留。
 """
 from __future__ import annotations
 
@@ -25,7 +28,10 @@ from lxml import etree
 
 from .book import NS, Book
 from .nav import NCX, Entry, build_nav, ncx_path
+from .rules.content import Z3998_URI
 from .semantic import BULLET_RE, NOTE_LABEL_RE, Analysis, Block, _local, _size_level, _style_of, class_styles
+from .structures import ARTICLE, CN_ITEM, OL_NUM
+from .tables import rebuild_table
 from .upgrade import book_language, content_properties
 from .xhtml import X, is_external, squash
 
@@ -42,7 +48,11 @@ TYPE_BY_TITLE = [
     (re.compile(r'^(后记|尾声|结语|跋)'), 'afterword', 'doc-afterword'),
     (re.compile(r'^附录'), 'appendix', 'doc-appendix'),
     (re.compile(r'^(参考文献|参考书目)'), 'bibliography', 'doc-bibliography'),
+    (re.compile(r'^(术语表|名词解释|词汇表|译名对照|人名对照|名词对照)'), 'glossary', 'doc-glossary'),
 ]
+TEMPLATE_ORDER = ('poem', 'letter', 'article', 'list', 'figure', 'loi', 'table', 'glossary')
+WS_LEAD = ' \t\r\n\u3000\u00a0\u2002\u2003'
+PAGE_TAIL = re.compile(r'[\s.．·…⋯—_-]*\d+\s*$')
 
 
 CHAPTER_ONLY_RE = re.compile(r'^(第[一二三四五六七八九十百千零〇两\d]+[章回]|chapter\s*\d+)', re.I)
@@ -60,7 +70,7 @@ class Chapter:
     path: str = ''
     epub_type: str = 'chapter'
     role: str | None = 'doc-chapter'
-    kind: str = 'chapter'                 # chapter / part / front（第一个标题之前的内容）
+    kind: str = 'chapter'                 # chapter / part / front（第一个标题之前的内容）/ loi / lot
     level: int = 2                        # 本文件首标题输出的 h 数字
 
 
@@ -70,10 +80,29 @@ class RebuildReport:
     chapters: list[str] = field(default_factory=list)
     notes: int = 0
     log: list[str] = field(default_factory=list)
+    structures: Counter = field(default_factory=Counter)          # 输出的成组结构：(类别, 置信级) → 个数
+    suggestions: list[dict] = field(default_factory=list)         # 只建议、没改的（C 级识别、对不上的目录条目）
 
 
 def theme_css(name: str = 'default') -> bytes:
     return resources.files('epub_typesetter').joinpath(f'themes/{name}.css').read_bytes()
+
+
+def template_css(name: str) -> str:
+    """04 的按需模板（scripts/build_theme.py 生成）；含 {N} 占位的悬挂变体行我们不输出，去掉。"""
+    css = resources.files('epub_typesetter').joinpath(f'themes/tpl-{name}.css').read_text(encoding='utf-8')
+    return '\n'.join(ln for ln in css.splitlines() if '{N' not in ln)
+
+
+IMG_ATTRS = {'src', 'alt', 'title', 'id', 'lang', XML_LANG, EPUB + 'type', 'role', 'width', 'height',
+             'viewBox', 'preserveAspectRatio', '{http://www.w3.org/1999/xlink}href', 'href'}
+
+
+def _clean_media(e: etree._Element) -> None:
+    """复制过来的图片只留标准属性：厂商私有属性（zy-enlarge-src 等）会让 epubcheck 报 RSC-005。"""
+    for k in list(e.attrib):
+        if k not in IMG_ATTRS and not k.startswith('aria-'):
+            del e.attrib[k]
 
 
 def _el(tag: str, attrib: dict | None = None, text: str | None = None) -> etree._Element:
@@ -161,6 +190,10 @@ class Rebuilder:
         self.endnotes: list[tuple[int, Block, str]] = []  # (注序号, 注块, 首次引用所在新文档)
         self.frag_map: dict[tuple[str, str], str] = {}   # (旧文档, id) → 新 id（id 被替换时）
         self.removed_docs: set[str] = set()
+        self.tpl_used: set[str] = set()                   # 用到的 04 模板，样式表只追加这些
+        self.block_path: dict[int, str] = {}              # 块序号 → 新文档
+        self.target_ids: dict[int, str] = {}              # 被目录引用的图、表块序号 → 输出 id（figure-N / table-N）
+        self.list_entries: dict[int, tuple[str, str] | None] = {}   # 目录条目块 → (链接, 文字)
 
     # ---------- 1. 分章 ----------
 
@@ -213,7 +246,15 @@ class Rebuilder:
                 self.rep.removed.append((b.role, b.text))
                 continue
             out = self.head_out.get(b.idx) if b.role == 'heading' else None
-            if out is not None and out[2] in ('part', 'chapter') or cur is None:
+            if b.role == 'loi-head':                  # 插图（表格）目录自成一个文件（04 4.11.4.4）
+                kind = self.an.units[b.unit]['kind']
+                cur = Chapter(b.text, kind=kind, epub_type=kind, role=None)
+                chapters.append(cur)
+            elif cur is not None and cur.kind in ('loi', 'lot') and b.role != 'loi-entry' and \
+                    not (out is not None and out[2] in ('part', 'chapter')):
+                cur = Chapter('', kind='front')        # 目录页之后、下一个标题之前的内容
+                chapters.append(cur)
+            elif out is not None and out[2] in ('part', 'chapter') or cur is None:
                 if out is not None and out[2] in ('part', 'chapter'):
                     cur = Chapter(b.text, kind=out[2], level=out[0])
                 else:
@@ -227,7 +268,9 @@ class Rebuilder:
                 if rx.match(ch.title):
                     ch.epub_type, ch.role = t, role
                     break
-            if ch.kind == 'part':
+            if ch.kind in ('loi', 'lot'):
+                name = ch.kind
+            elif ch.kind == 'part':
                 ch.epub_type, ch.role = 'part', 'doc-part'
                 n_part = sum(1 for c in chapters[:chapters.index(ch) + 1] if c.kind == 'part')
                 name = f'part{n_part:02d}'
@@ -246,6 +289,7 @@ class Rebuilder:
                 for a in b.anchors:
                     self.id_map[(b.doc, a)] = ch.path
                 self.doc_map.setdefault(b.doc, ch.path)
+                self.block_path[b.idx] = ch.path
         self.removed_docs = {b.doc for b in self.an.blocks} - set(self.doc_map)
         # nav 会按新标题重新生成，原 nav 里的自定义段落（如「表格目录」）不再存在，指向它的链接只留文字
         self.removed_docs |= {i.path for i in self.book.manifest() if 'nav' in i.properties}
@@ -281,10 +325,67 @@ class Rebuilder:
                                 self.frag_map[(nb.doc, anc)] = f'note-{num}'
         self.rep.notes = n
 
+    # ---------- 2b. 插图、表格目录：条目对到图表，给被引用的图表定 id（04 4.11.1.7、4.11.4、4.13.1.9） ----------
+
+    def _caption_of(self, idx: int) -> str:
+        """图（表）的图注（表题）第一行文字。"""
+        blocks = self.an.blocks
+        b = blocks[idx]
+        if _local(b.el.tag) == 'figure':
+            cap = b.el.find(X + 'figcaption')
+            return squash(''.join(cap.itertext())) if cap is not None else ''
+        for c in blocks[max(0, idx - 1): idx + 2]:
+            if c.role in ('caption', 'table-caption') and c.group == idx:
+                return c.text
+        cap = b.el.find('.//' + X + 'caption')
+        return squash(''.join(cap.itertext())) if cap is not None else ''
+
+    def plan_lists_of(self) -> None:
+        blocks = self.an.blocks
+        units = {u: info for u, info in self.an.units.items() if info['kind'] in ('loi', 'lot')}
+        if not units:
+            return
+        figures = [b.idx for b in blocks if b.role == 'figure']
+        tables = [b.idx for b in blocks if b.role == 'keep'
+                  and (_local(b.el.tag) == 'table' or b.el.find('.//' + X + 'table') is not None)]
+        by_anchor = {(b.doc, a): b for b in blocks for a in b.anchors}
+        for u, info in units.items():
+            pool = figures if info['kind'] == 'loi' else tables
+            captions = {i: re.sub(r'\s', '', self._caption_of(i)) for i in pool}
+            for e in (b for b in blocks if b.unit == u and b.role == 'loi-entry'):
+                text = PAGE_TAIL.sub('', e.text).strip()
+                hit = None
+                a = e.el.find('.//' + X + 'a')
+                if a is not None and a.get('href') and not is_external(a.get('href')):
+                    href = a.get('href')
+                    t = by_anchor.get((Book.resolve(e.doc, href), href.partition('#')[2]))
+                    if t is not None:
+                        near = [x for x in blocks[max(0, t.idx - 1): t.idx + 3] if x.doc == t.doc]
+                        if t.idx in pool:
+                            hit = t.idx
+                        elif t.role in ('caption', 'table-caption') and t.group in pool:
+                            hit = t.group
+                        else:
+                            hit = next((x.idx for x in near if x.idx in pool), None)
+                if hit is None and text:                 # 没有链接：按图号、题名对图注
+                    key = re.sub(r'\s', '', text)
+                    hit = next((i for i, c in captions.items() if c and (c.startswith(key) or key.startswith(c))), None)
+                if hit is None:
+                    self.list_entries[e.idx] = None
+                    self.rep.suggestions.append({'kind': info['kind'], 'doc': e.doc,
+                                                 'text': f'{info["title"]}的条目「{text[:30]}」对不上任何图表，保留文字、不加链接'})
+                    continue
+                n = pool.index(hit) + 1
+                fid = self.target_ids.setdefault(hit, f'{"figure" if info["kind"] == "loi" else "table"}-{n}')
+                cap = self._caption_of(hit)
+                label = cap.split('\n')[0] if cap and len(cap) <= 40 else text
+                self.list_entries[e.idx] = (f'{self.block_path.get(hit, "")}#{fid}', label or text)
+
     # ---------- 3. 链接改写 ----------
 
     def _href(self, href: str) -> str | None:
         """把旧文档里的 href 改写为新文档里的；目标整份被删（如广告页）时返回 None。"""
+        href = (href or '').strip()
         if not href or is_external(href):
             return href
         path, _, frag = href.partition('#')
@@ -402,8 +503,7 @@ class Rebuilder:
                 glyph = tag == 'img' and self._is_glyph(ch)
                 e = copy.deepcopy(ch)
                 e.tail = None                  # deepcopy 会带上 tail；tail 由外层 walk 统一追加，否则文字重复
-                for k in ('style', 'align', 'border', 'hspace', 'vspace', 'class'):
-                    e.attrib.pop(k, None)
+                _clean_media(e)
                 if glyph:
                     e.set('class', 'glyph')    # 主题里限定为一个字大小
                     e.attrib.pop('width', None)
@@ -496,10 +596,15 @@ class Rebuilder:
         etree.SubElement(head, X + 'link', {'rel': 'stylesheet', 'type': 'text/css',
                                             'href': Book.relative(ch.path, self.css_path)})
         body = etree.SubElement(html, X + 'body')
-        sec = etree.SubElement(body, X + 'section', {'id': posixpath.basename(ch.path)[:-6],
-                                                     EPUB + 'type': ch.epub_type})
-        if ch.role:
-            sec.set('role', ch.role)
+        if ch.kind in ('loi', 'lot'):                 # 目录页的根就是 nav（04 4.11.4.3），不再套 section
+            sec = body
+            pos = self.chapters.index(ch)              # 位置随原书：在全书前半为前置部分，否则为后置部分
+            body.set(EPUB + 'type', 'frontmatter' if pos < len(self.chapters) / 2 else 'backmatter')
+        else:
+            sec = etree.SubElement(body, X + 'section', {'id': posixpath.basename(ch.path)[:-6],
+                                                         EPUB + 'type': ch.epub_type})
+            if ch.role:
+                sec.set('role', ch.role)
         blocks = ch.blocks
         i = 0
         while i < len(blocks):
@@ -518,27 +623,49 @@ class Rebuilder:
                     i += 1
                     continue
                 b.role = 'para'                       # 没被引用的注（孤注）：按普通段落保留
+            if b.role in ('poem', 'letter', 'ol', 'dl') and b.unit >= 0:
+                j = i
+                while j < len(blocks) and blocks[j].unit == b.unit and blocks[j].role == b.role:
+                    j += 1
+                sec.append(getattr(self, f'_render_{b.role}')(blocks[i:j]))
+                i = j
+                continue
+            if b.role == 'loi-head':
+                sec.append(self._render_list_of(blocks[i:], ch))
+                i += 1
+                while i < len(blocks) and blocks[i].role == 'loi-entry':
+                    i += 1
+                continue
+            if b.role == 'table-caption' and i + 1 < len(blocks) and blocks[i + 1].idx == b.group:
+                i += 1                                # 由后面的表格收进 caption
+                continue
             if b.role == 'figure' and _local(b.el.tag) != 'figure':   # 原有 <figure> 走下面的整体保留
-                fig = _el('figure')
+                fig = _el('figure', {'id': self.target_ids.get(b.idx)})
                 self._anchors(b, fig)
                 for img in b.el.iter():
                     if isinstance(img.tag, str) and _local(img.tag) in ('img', 'svg'):
                         e = copy.deepcopy(img)
                         e.tail = None
-                        for k in ('style', 'width', 'height', 'align', 'border', 'hspace', 'vspace'):
-                            if _local(img.tag) == 'img':
-                                e.attrib.pop(k, None)
+                        _clean_media(e)
+                        if _local(img.tag) == 'img':
+                            e.attrib.pop('width', None)
+                            e.attrib.pop('height', None)
                         if e.get('src'):
                             e.set('src', self._href(e.get('src')))
                         fig.append(e)
                 j = i + 1
-                if j < len(blocks) and blocks[j].role == 'caption' and blocks[j].group == b.idx:
-                    cap = _el('figcaption')
-                    self.cur_doc = blocks[j].doc
-                    self.inline(blocks[j].el, cap, sized=True)
-                    self._anchors(blocks[j], cap)
-                    fig.append(cap)
+                caps = []
+                while j < len(blocks) and blocks[j].role == 'caption' and blocks[j].group == b.idx:
+                    caps.append(blocks[j])
                     j += 1
+                if caps:
+                    cap = _el('figcaption')
+                    for c in caps:                    # 多段图注：每段一个 p（04 4.11.3.5）
+                        part = cap if len(caps) == 1 else etree.SubElement(cap, X + 'p')
+                        self.cur_doc = c.doc
+                        self.inline(c.el, part, sized=True)
+                        self._anchors(c, part)
+                    fig.append(cap)
                 for img in fig.iter(X + 'img'):
                     if img.get('alt') is None:
                         img.set('alt', '')
@@ -559,8 +686,12 @@ class Rebuilder:
             if b.role == 'keep' or b.role == 'figure' and _local(b.el.tag) == 'figure':
                 e = copy.deepcopy(b.el)
                 e.tail = None
+                if b.idx in self.target_ids and not e.get('id'):
+                    e.set('id', self.target_ids[b.idx])
                 for d in e.iter():
                     if isinstance(d.tag, str):
+                        if _local(d.tag) in ('img', 'image'):
+                            _clean_media(d)
                         for k in ('href', 'src'):
                             if d.get(k):
                                 new = self._href(d.get(k))
@@ -568,9 +699,18 @@ class Rebuilder:
                                     del d.attrib[k]
                                 else:
                                     d.set(k, new)
+                if b.role == 'keep':                  # 链接改写之后再收表题（表题的链接已由 inline 改写过）
+                    self._render_tables(b, e, blocks[i - 1] if i else None)
                 self._anchors(b, e)
                 sec.append(e)
                 i += 1
+                if i < len(blocks) and blocks[i].role == 'table-note' and blocks[i].group == b.idx:
+                    note = _el('p', {'class': 'table-note'})
+                    self.cur_doc = blocks[i].doc
+                    self.inline(blocks[i].el, note, sized=True)
+                    self._anchors(blocks[i], note)
+                    sec.append(note)
+                    i += 1
                 continue
             if b.role == 'heading':
                 n_out, cls, _ = self.head_out.get(b.idx, (min(b.level + 1, 6), None, 'sub'))
@@ -579,6 +719,24 @@ class Rebuilder:
                 e.set('id', f'h{self.heading_no}')     # 稳定 id，供 nav 定位；原有锚点由 _anchors 另加
             elif b.role in ('caption',):              # 没跟在图后面的图注：居中小字
                 e = _el('p', {'class': 'align-center small'})
+            elif b.role == 'item':                    # 中文序号项（04 4.10.2）
+                e = _el('p', {'class': f'item hang-{b.attrs.get("hang", 2)}'})
+                self.tpl_used.add('article')
+            elif b.role == 'article':                 # 条文：条号包 span，后接一个全角空格（04 4.10.1）
+                e = _el('p', {'class': 'article'})
+                self.tpl_used.add('article')
+                self.inline(b.el, e)
+                m = ARTICLE.match(e.text or '')
+                if m:
+                    rest = e.text[m.end():]
+                    e.text = None
+                    no = _el('span', {'class': 'article-no'}, m.group(1))
+                    no.tail = '\u3000' + rest
+                    e.insert(0, no)
+                self._anchors(b, e)
+                sec.append(e)
+                i += 1
+                continue
             else:
                 cls = {'source': 'source', 'meta': 'meta', 'right': 'align-right', 'center': 'align-center'}
                 e = _el('p', {'class': cls.get(b.role)})
@@ -600,7 +758,222 @@ class Rebuilder:
             self._anchors(b, e)
             sec.append(e)
             i += 1
+        if ch.epub_type == 'glossary':
+            for dl in sec.iter(X + 'dl'):
+                self._glossary_dl(dl)
+        self._declare_prefix(html)
         return html
+
+    # ---------- 5b. 成组结构 ----------
+
+    @staticmethod
+    def _declare_prefix(html) -> None:
+        """用了 z3998: 就在 <html> 上声明前缀（04 4.1.4.3、4.7.1.5）。"""
+        if any('z3998:' in (e.get(EPUB + 'type') or '') for e in html.iter() if isinstance(e.tag, str)):
+            html.set(EPUB + 'prefix', f'z3998: {Z3998_URI}')
+
+    def _line_spans(self, b: Block) -> list:
+        """把一块的行内内容按 <br/> 切成诗行：返回 span 列表，None 表示节界（空行）。"""
+        tmp = _el('p')
+        self.cur_doc = b.doc
+        self.inline(b.el, tmp)
+        out, cur = [], _el('span', {'class': 'line'})
+        cur.text = tmp.text
+
+        def close():
+            nonlocal cur
+            empty = not ''.join(cur.itertext()).strip(WS_LEAD) and not len(cur)
+            out.append(None if empty else cur)
+            cur = _el('span', {'class': 'line'})
+        for ch in list(tmp):
+            if ch.tag == X + 'br':
+                tail = ch.tail
+                close()
+                cur.text = tail
+            else:
+                cur.append(ch)
+        close()
+        for sp in out:                                # 行首的缩进空格交给 indent-N
+            if sp is not None and sp.text:
+                sp.text = sp.text.lstrip(WS_LEAD) or None
+        while out and out[-1] is None:
+            out.pop()
+        while out and out[0] is None:
+            out.pop(0)
+        return out
+
+    def _render_poem(self, group: list[Block]) -> etree._Element:
+        """诗歌（04 §4.7）：一节一个 p.stanza，一行一个 span.line，行间 <br/>，缩进用 indent-N。"""
+        info = self.an.units[group[0].unit]
+        self.tpl_used.add('poem')
+        self.rep.structures[('诗歌', info['level'])] += 1
+        tag = 'div' if info['container'] == 'div' else 'blockquote'
+        box = _el(tag, {'class': ('poem ' if tag == 'div' else 'poem-quote ') + info['layout'],
+                        EPUB + 'type': info['type']})
+        stanza = None
+
+        def add_line(span, indent: int):
+            nonlocal stanza
+            if stanza is None:
+                stanza = _el('p', {'class': 'stanza'})
+                box.append(stanza)
+            elif len(stanza):
+                stanza[-1].tail = None
+                stanza.append(_el('br'))
+            if indent and info['layout'] != 'poem-center':
+                span.set('class', f'line indent-{indent}')
+            stanza.append(span)
+
+        for b in group:
+            if b.part in ('title', 'author', 'attribution'):
+                e = _el('p', {'class': {'title': 'poem-title', 'author': 'poem-author',
+                                        'attribution': 'attribution'}[b.part]})
+                self.cur_doc = b.doc
+                self.inline(b.el, e, sized=True)
+                self._anchors(b, e)
+                if b.part == 'attribution':
+                    box.append(e)
+                else:
+                    box.insert(len([x for x in box if x.get('class') in ('poem-title', 'poem-author')]), e)
+                continue
+            indents = b.attrs.get('indents', [])
+            spans = self._line_spans(b)
+            multi = b.el.find('.//' + X + 'br') is not None
+            if multi or b.gap_before:
+                stanza = None                         # 一块多行 = 一节；单行块前有空段 = 新一节
+            first = True
+            k = 0
+            for sp in spans:
+                if sp is None:
+                    stanza = None
+                    k += 1
+                    continue
+                if first:
+                    self._anchors(b, sp)
+                    first = False
+                add_line(sp, indents[k] if k < len(indents) else 0)
+                k += 1
+            if multi:
+                stanza = None
+        return box
+
+    def _render_letter(self, group: list[Block]) -> etree._Element:
+        """书信（04 §4.8）：叙事中引信用 blockquote.letter，各部分各自成段并带 z3998 语义。"""
+        self.tpl_used.add('letter')
+        self.rep.structures[('书信', 'B')] += 1
+        box = _el('blockquote', {'class': 'letter', EPUB + 'type': 'z3998:letter'})
+        spec = {'salutation-pre': ('salutation', 'z3998:salutation'), 'salutation': ('salutation', 'z3998:salutation'),
+                'valediction': (None, 'z3998:valediction'), 'closing': ('closing', 'z3998:valediction'),
+                'signature': ('signature', 'z3998:sender z3998:signature'), 'date': ('date', None),
+                'dateline': ('dateline', None), 'postscript': ('postscript', 'z3998:postscript'), 'body': (None, None)}
+        for b in group:
+            cls, et = spec.get(b.part, (None, None))
+            e = _el('p', {'class': cls, EPUB + 'type': et})
+            self.cur_doc = b.doc
+            self.inline(b.el, e)
+            self._anchors(b, e)
+            box.append(e)
+        return box
+
+    def _render_ol(self, group: list[Block]) -> etree._Element:
+        """阿拉伯数字序号段 → ol，文字里的序号删去，由 ol 生成（04 4.10.3.1）。"""
+        info = self.an.units[group[0].unit]
+        self.rep.structures[('有序列表', 'B')] += 1
+        ol = _el('ol', {'start': str(info['start']) if info.get('start', 1) != 1 else None})
+        for b in group:
+            li = _el('li')
+            self.cur_doc = b.doc
+            self.inline(b.el, li, OL_NUM)
+            self._anchors(b, li)
+            ol.append(li)
+        return ol
+
+    def _render_dl(self, group: list[Block]) -> etree._Element:
+        info = self.an.units[group[0].unit]
+        self.tpl_used.add('list')
+        self.rep.structures[('定义列表', 'A')] += 1
+        dl = _el('dl')
+        for b in group:
+            e = _el('dt' if b.part == 'dt' else 'dd')
+            self.cur_doc = b.doc
+            self.inline(b.el, e)
+            self._anchors(b, e)
+            dl.append(e)
+        if info.get('glossary'):
+            self._glossary_dl(dl)
+        return dl
+
+    def _glossary_dl(self, dl) -> None:
+        """术语表的 dl（04 §4.19）：dt 加 glossterm 与 dfn，dd 加 glossdef 且内含 p。"""
+        if 'glossary' in (dl.get('class') or ''):
+            return
+        self.tpl_used.add('glossary')
+        dl.set('class', 'glossary')
+        for e in dl:
+            if e.tag == X + 'dt':
+                e.set(EPUB + 'type', 'glossterm')
+                if e.find(X + 'dfn') is None:
+                    dfn = _el('dfn')
+                    dfn.text, e.text = e.text, None
+                    for c in list(e):
+                        dfn.append(c)
+                    e.append(dfn)
+            elif e.tag == X + 'dd':
+                e.set(EPUB + 'type', 'glossdef')
+                if e.find(X + 'p') is None:
+                    p = _el('p')
+                    p.text, e.text = e.text, None
+                    for c in list(e):
+                        p.append(c)
+                    e.append(p)
+
+    def _render_list_of(self, rest: list[Block], ch: Chapter) -> etree._Element:
+        """插图（表格）目录（04 4.11.4、4.13.1.10）：nav + h2 + ol，条目链接到图表的 id，删页码。"""
+        head = rest[0]
+        kind = self.an.units[head.unit]['kind']
+        self.tpl_used.add('loi' if kind == 'loi' else 'table')
+        self.rep.structures[('插图目录' if kind == 'loi' else '表格目录', 'A')] += 1
+        nav = _el('nav', {'id': kind, 'class': kind, EPUB + 'type': kind})
+        h = _el('h2', {'class': 'chapter-title'})
+        self.cur_doc = head.doc
+        self.inline(head.el, h, plain=True)
+        self._anchors(head, h)
+        nav.append(h)
+        ol = _el('ol')
+        for e in rest[1:]:
+            if e.role != 'loi-entry':
+                break
+            li = _el('li')
+            plan = self.list_entries.get(e.idx)
+            if plan is None:
+                li.text = PAGE_TAIL.sub('', e.text).strip()
+            else:
+                target, label = plan
+                path, _, frag = target.partition('#')
+                a = _el('a', {'href': f'{Book.relative(self.cur_new, path) if path != self.cur_new else ""}#{frag}'},
+                        label)
+                li.append(a)
+            self._anchors(e, li)
+            ol.append(li)
+        nav.append(ol)
+        return nav
+
+    def _render_tables(self, b: Block, e: etree._Element, prev: Block | None) -> None:
+        """表格结构规范化（04 4.13.1），上方的表题收进 caption。"""
+        tables = [e] if e.tag == X + 'table' else list(e.iter(X + 'table'))
+        if not tables:
+            return
+        self.tpl_used.add('table')
+        for t in tables:
+            for line in rebuild_table(t):
+                self.rep.structures[(f'表格：{line}', 'A')] += 1
+        if prev is not None and prev.role == 'table-caption' and prev.group == b.idx:
+            cap = _el('caption')
+            self.cur_doc = prev.doc
+            self.inline(prev.el, cap, sized=True)
+            self._anchors(prev, cap)
+            self.cur_doc = b.doc
+            tables[0].insert(0, cap)
 
     def render_endnotes(self) -> etree._Element:
         """书末尾注：<section epub:type="endnotes"><ol><li id="note-n"><p>注文 <a epub:type="backlink">↩</a></p></li></ol>。"""
@@ -666,8 +1039,9 @@ class Rebuilder:
 
     def run(self) -> RebuildReport:
         book = self.book
-        chapters = self.split()
+        chapters = self.chapters = self.split()
         self.number_notes(chapters)
+        self.plan_lists_of()
         old_docs = {b.doc for b in self.an.blocks}
         trees = [(ch, self.render_chapter(ch)) for ch in chapters]
         if self.endnotes:
@@ -698,6 +1072,12 @@ class Rebuilder:
         if self.an.vertical:                          # 整本竖排：追加竖排模板（guide/04 T19）
             css += b'\n' + theme_css('vertical')
             self.rep.log.append('保留整本竖排（追加 vertical 样式）')
+        for name in TEMPLATE_ORDER:                   # 只追加用到的模板（04 附录 B.2 第 2 条）
+            if name in self.tpl_used:
+                css += b'\n' + template_css(name).encode('utf-8') + b'\n'
+        if self.tpl_used:
+            self.rep.log.append('追加模板样式：' + '、'.join(n for n in TEMPLATE_ORDER if n in self.tpl_used))
+        self.rep.suggestions = self.an.suggestions + self.rep.suggestions
         book.add_item(self.css_path, 'text/css', item_id='typesetter-css', data=css)
 
         # 封面页
@@ -756,6 +1136,9 @@ class Rebuilder:
         body_ch = next((c for c in chapters if c.epub_type == 'chapter'), chapters[0] if chapters else None)
         if body_ch is not None:
             landmarks.append(('bodymatter', '正文', body_ch.path))
+        for c in chapters:
+            if c.kind in ('loi', 'lot'):
+                landmarks.append((c.kind, c.title, c.path))
         if any(c.epub_type == 'endnotes' for c in chapters):
             landmarks.append(('endnotes', '注释', self.endnotes_path))
         nav_item = next((i for i in book.manifest() if 'nav' in i.properties), None)

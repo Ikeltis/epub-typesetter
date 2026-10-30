@@ -145,11 +145,22 @@ def compare_blocks(blocks, removed_roles: set[str], after: Book) -> BlockCheck:
         if b.role in removed_roles:
             removed += 1
             continue
-        t = _INVISIBLE.sub('', _NOTE_MARK.sub('', _BULLET.sub('', b.text.strip())))
+        src = b.text if getattr(b, 'verify', None) is None else b.verify   # 重建有意改写的块按期望文字核对
+        t = _INVISIBLE.sub('', _NOTE_MARK.sub('', _BULLET.sub('', src.strip())))
         if not t:
             continue
         total += 1
         chars += len(t)
         if t not in text:
             missing.append((b.role, b.text))
+    # 图片没有文字，按块核对不出丢失：另数一遍图片（有意删除的块里的不算）
+    media = lambda el: sum(1 for d in el.iter() if isinstance(d.tag, str) and d.tag.rsplit('}', 1)[-1] in ('img', 'image'))
+    imgs_before = sum(media(b.el) for b in blocks if b.role not in removed_roles)
+    imgs_after = 0
+    for it in after.spine_items():
+        if it.path in after.files and it.media_type == 'application/xhtml+xml':
+            root = after.tree(it.path).getroot()
+            imgs_after += sum(media(e) for e in root.iter() if isinstance(e.tag, str) and e.tag.endswith('}body'))
+    if imgs_after < imgs_before:
+        missing.append(('图片', f'重建前 {imgs_before} 张，重建后只有 {imgs_after} 张'))
     return BlockCheck(total, missing, removed, chars, len(text))

@@ -40,23 +40,34 @@ class ImageAlt(Rule):
                 out.append(self.issue(ERROR, f'{len(missing)} 张图片没有 alt 属性', path, AUTO,
                                       hits=[self.hit(i, fix={'op': 'set_attr', 'name': 'alt'}) for i in missing]))
             if badname:
-                out.append(self.issue(WARNING, f'{len(badname)} 张图片的 alt 是文件名/无意义词', path, LLM,
-                                      hits=[self.hit(i) for i in badname]))
+                out.append(self.issue(WARNING, f'{len(badname)} 张图片的 alt 是文件名或无意义词，清空并标「待补描述」',
+                                      path, AUTO, hits=[self.hit(i, fix={'op': 'set_attr', 'name': 'alt'})
+                                                        for i in badname]))
+            pending = [i for i in imgs if i.get('alt') == '' and _caption_for(i) != '' and 'glyph' not in
+                       (i.get('class') or '').split()]
+            if pending:
+                out.append(self.issue(INFO, f'{len(pending)} 张有图注的插图 alt 为空，待补描述', path, LLM,
+                                      hits=[self.hit(i) for i in pending]))
         return out
 
     def fix(self, book, issues):
         log = []
         for i in issues:
-            cap = empty = 0
+            if i.fix_level != AUTO:
+                continue
+            n = 0
             keep = i.waived_nodes()
             for img in body(book.tree(i.file).getroot()).iter(X + 'img'):
-                if img.get('alt') is None and img not in keep:
-                    c = _caption_for(img)
-                    img.set('alt', c)
-                    cap += bool(c)
-                    empty += not c
-            book.mark_dirty(i.file)
-            log.append(f'{i.file}：补 alt（取自图注 {cap}，暂空 {empty}，待大模型/人工补描述）')
+                if img in keep:
+                    continue
+                alt = img.get('alt')
+                # 04 4.11.2.5、4.11.2.7：缺 alt 或 alt 是文件名时一律写 alt=""，不抄图注（读屏会念两遍，D8）
+                if alt is None or alt.strip() and FILENAME_ALT.search(alt.strip()):
+                    img.set('alt', '')
+                    n += 1
+            if n:
+                book.mark_dirty(i.file)
+                log.append(f'{i.file}：{n} 张图片的 alt 置为空串，待补描述（不抄图注）')
         return log
 
 

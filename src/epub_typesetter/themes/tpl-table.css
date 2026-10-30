@@ -1,0 +1,14 @@
+/* tpl:table（04） */
+table.table-narrow{ width:auto; margin-left:auto; margin-right:auto; }
+table.compact{ font-size:.8em; }
+table.all-line{ border:2px solid; }
+table.all-line th, table.all-line td{ border:1px solid rgba(127,127,127,.7); }
+table.part-line{ border-top:2px solid; border-bottom:2px solid; }
+table.part-line th + th, table.part-line td + td{ border-left:1px solid rgba(127,127,127,.7); }
+table td.text{ text-align:left; text-indent:0; }
+table th{ padding:.45em .5em; }
+table th[scope="rowgroup"]{ text-align:left; background:rgba(127,127,127,.2); }
+table tfoot th, table tfoot td{ border-top:1px solid; }
+p.table-note{ margin:.3em 0 0; font-size:.8em; line-height:1.5; text-indent:0; text-align:left; }
+div.table-wrap{ overflow-x:auto; }
+nav.lot ol{ list-style:none; margin:.8em 0; padding-left:0; }

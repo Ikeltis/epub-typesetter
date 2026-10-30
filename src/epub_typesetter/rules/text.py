@@ -16,6 +16,11 @@ from ..book import Book
 # 半角空格会被渲染折叠，不算缩进；但允许其前有源码换行/空格
 INDENT_RE = re.compile(r'^[ \t\r\n]*[\u3000\u00a0\u2002\u2003]+')
 # 删除：控制字符、BOM、零宽空格、词连接符。保留 ZWJ/ZWNJ（emoji、部分文字需要）
+def indent_width(s: str) -> float:
+    """行首空白的字宽：全角空格、em 空格算 1，不换行空格、en 空格算半个。"""
+    return sum(1 if c in '\u3000\u2003' else .5 if c in '\u00a0\u2002' else 0 for c in s)
+
+
 INVISIBLE_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\ufeff\u200b\u2060]')
 MOJIBAKE_RE = re.compile(r'\ufffd|锟斤拷|烫烫烫|屯屯屯|Ã[\x80-\xbf]|ï¿½')
 INDENT_CLASS = 'ts-indent'
@@ -122,6 +127,7 @@ class ManualIndent(Rule):
                 el, attr = lt
                 s = getattr(el, attr) or ''
                 if INDENT_RE.match(s):
+                    book.removed_indent[p] = indent_width(INDENT_RE.match(s).group(0))
                     setattr(el, attr, INDENT_RE.sub('', s))
                     if as_indent:
                         cls = (p.get('class') or '').split()
@@ -221,7 +227,9 @@ class EmptyParagraphs(Rule):
 
 
 def _edge_brs(p) -> list:
-    """段首（前面没有文字）和段尾（后面没有文字）的 br。"""
+    """段首（前面没有文字）和段尾（后面没有文字）的 br。诗节 p.stanza 的 br 归 SEM-034 管（04 附录 B.2 第 8 条）。"""
+    if 'stanza' in (p.get('class') or '').split():
+        return []
     kids = [c for c in p if isinstance(c.tag, str)]
     out = []
     if not (p.text or '').strip():

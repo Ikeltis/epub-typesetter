@@ -1,0 +1,17 @@
+/* tpl:figure（04） */
+figure.figure-group{ margin:.8em 0; }
+.figure-row{ text-align:center; }
+figure.figure-col{ display:inline-block; width:48%; margin:0 .5%; vertical-align:top; }
+figure.figure-col figcaption{ font-size:.8em; }
+figure.full-page{ break-before:page; break-after:page; }
+img.glyph{ height:1em; width:auto; margin:0; padding:0; vertical-align:middle; }
+img.formula{ width:auto; margin:0; padding:0; vertical-align:middle; }
+figure.float-left, figure.float-right{ width:45%; margin:.2em 0 .5em; text-indent:0; }
+figure.float-left{ float:left; margin-right:1em; }
+figure.float-right{ float:right; margin-left:1em; }
+.clear{ clear:both; }
+img.line-art{ background-color:#fff; padding:.25em; }
+img.shadow{ box-shadow:3px 3px 10px rgba(127,127,127,.5); }
+@media (max-width:30em){
+	figure.float-left, figure.float-right{ float:none; width:auto; margin:.8em 0; }
+}

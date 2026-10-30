@@ -50,6 +50,13 @@ TYPE_BY_TITLE = [
     (re.compile(r'^(参考文献|参考书目)'), 'bibliography', 'doc-bibliography'),
     (re.compile(r'^(术语表|名词解释|词汇表|译名对照|人名对照|名词对照)'), 'glossary', 'doc-glossary'),
 ]
+MATTER_TYPES = {'preface': ('preface', 'doc-preface'), 'foreword': ('foreword', 'doc-foreword'),
+                'introduction': ('introduction', 'doc-introduction'), 'prologue': ('prologue', 'doc-prologue'),
+                'epilogue': ('epilogue', 'doc-epilogue'), 'afterword': ('afterword', 'doc-afterword'),
+                'acknowledgments': ('acknowledgments', 'doc-acknowledgments'), 'appendix': ('appendix', 'doc-appendix'),
+                'bibliography': ('bibliography', 'doc-bibliography'), 'glossary': ('glossary', 'doc-glossary'),
+                'dedication': ('dedication', 'doc-dedication'), 'epigraph': ('epigraph', 'doc-epigraph'),
+                'copyright': ('copyright-page', None)}
 TEMPLATE_ORDER = ('poem', 'letter', 'script', 'article', 'list', 'figure', 'loi', 'table', 'glossary')
 WS_LEAD = ' \t\r\n\u3000\u00a0\u2002\u2003'
 PAGE_TAIL = re.compile(r'[\s.．·…⋯—_-]*\d+\s*$')
@@ -227,8 +234,13 @@ class Rebuilder:
         in_part = False
         cur_n = 2
         for h in heads:
-            force = h.attrs.get('force')                # 确认板上用户指定的章、节
-            if force == 'chapter':
+            force = h.attrs.get('force')                # 确认板上用户指定的部、章、节
+            if force == 'part':
+                self.head_out[h.idx] = (2, 'part-title', 'part')
+                in_part, cur_n = True, 2
+            elif force == 'subsection':
+                self.head_out[h.idx] = (min(cur_n + 2, 6), 'subsection-title', 'sub')
+            elif force == 'chapter':
                 cur_n = 3 if in_part else 2
                 self.head_out[h.idx] = (cur_n, 'chapter-title', 'chapter')
             elif force == 'section':
@@ -278,6 +290,9 @@ class Rebuilder:
                 if rx.match(ch.title):
                     ch.epub_type, ch.role = t, role
                     break
+            matter = ch.blocks[0].attrs.get('matter') if ch.blocks else None
+            if matter and ch.kind not in ('loi', 'lot'):    # 确认板上指定的辅文类型（08 决策 D5）
+                ch.epub_type, ch.role = MATTER_TYPES[matter]
             if ch.kind in ('loi', 'lot'):
                 name = ch.kind
             elif ch.kind == 'part':

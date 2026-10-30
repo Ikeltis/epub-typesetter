@@ -16,7 +16,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from ..semantic import CLUSTER_ROLES, REASSIGNABLE, Analysis, cluster_key
+from ..semantic import CLUSTER_ROLES, MATTERS, REASSIGNABLE, Analysis, block_keys, cluster_key
 from .client import LLM, ContentBlocked, LLMError
 
 SAMPLES = 8
@@ -58,6 +58,39 @@ SYSTEM_STRUCT = '''你是中文电子书排版编辑。程序在一本 EPUB 里�
 KIND_NAMES = {'poem': '诗歌', 'letter': '书信', 'ol': '有序列表', 'item': '中文序号项', 'article': '法规条文',
               's-poem': '诗歌（程序拿不准）', 's-script': '剧本对白', 's-glossary': '术语表（「词：释义」成行文本）',
               's-table': '表格合计行移入表尾'}
+
+
+SYSTEM_HEADS = '''你是中文图书的结构编辑。下面是一本 EPUB 里程序识别出的全部标题（按书中顺序），每条带编号、所在文件、程序判定的级别；
+章一级的标题后面附有该章开头的一两句正文。请检查整本书的标题层级与辅文类型，只列出你认为需要改的条目。
+
+级别：
+- part：部、卷、编、篇（下面再分章）
+- chapter：章、回，以及独立成章的前言、序、后记、附录等
+- section：章内的节
+- subsection：节内的小节
+- para：其实不是标题（如正文里的短句、图注、诗题被误认作标题）
+
+辅文类型（只给章一级的条目标，正文章节不标）：preface 前言/序/自序/译序、foreword 他人写的序/推荐序、introduction 导言/引言、
+prologue 序幕/楔子、epilogue 尾声/结语（属正文）、afterword 后记/跋（属后置部分）、acknowledgments 致谢、appendix 附录、
+bibliography 参考文献、glossary 术语表、dedication 献辞、epigraph 题词、copyright 版权页。
+
+要求：
+- 层级要连贯：不能没有章就出现节；同一类标题（如所有「第X章」）级别一致；
+- 拿不准的不要列；不改写任何标题文字；
+- 每条给置信度 0–1 和一句 30 字以内的理由。'''
+
+
+class HeadChange(BaseModel):
+    n: int = Field(description='标题编号')
+    kind: Literal['part', 'chapter', 'section', 'subsection', 'para']
+    matter: Literal['', 'preface', 'foreword', 'introduction', 'prologue', 'epilogue', 'afterword', 'acknowledgments',
+                    'appendix', 'bibliography', 'glossary', 'dedication', 'epigraph', 'copyright'] = ''
+    confidence: float = Field(ge=0, le=1)
+    reason: str
+
+
+class HeadReview(BaseModel):
+    changes: list[HeadChange]
 
 
 class ClusterVerdict(BaseModel):
@@ -157,6 +190,28 @@ def struct_jobs(an: Analysis) -> list[tuple[str, str]]:
     return jobs
 
 
+MAX_HEADS = 600
+
+
+def heads_job(an: Analysis, head_kind: dict) -> tuple[str, list] | None:
+    """全部标题一次发给重型模型（层级要通盘看）。返回 (输入文字, 编号 → 块)。"""
+    blocks = an.blocks
+    heads = [b for b in blocks if b.role == 'heading'][:MAX_HEADS]
+    if len(heads) < 2:
+        return None
+    lines = []
+    for n, b in enumerate(heads, 1):
+        kind = head_kind.get(b.idx) or 'sub'
+        cur = {'part': 'part', 'chapter': 'chapter'}.get(kind) or ('subsection' if b.level >= 3 else 'section')
+        line = f'{n}. [{cur}] {_clip(b.text, 40)}  （{b.doc.rsplit("/", 1)[-1]}）'
+        if cur in ('chapter', 'part'):
+            after = [x for x in blocks[b.idx + 1:b.idx + 4] if x.doc == b.doc and x.role not in ('heading', 'figure')]
+            if after:
+                line += f'\n    开头：{_clip(after[0].text, 50)}'
+        lines.append(line)
+    return '\n'.join(lines), heads
+
+
 def run(llm: LLM, an: Analysis, head_kind: dict, tasks: set[str], progress=None) -> dict:
     """跑选中的任务，返回 llm.json 的内容。progress(done, total) 用于进度显示。"""
     out = {'clusters': {}, 'items': {}, 'errors': []}
@@ -181,6 +236,22 @@ def run(llm: LLM, an: Analysis, head_kind: dict, tasks: set[str], progress=None)
                 progress(done[0], len(jobs))
         return bucket, key, v, None
 
+    if 'heads' in tasks:                       # 重型模型，单独一次
+        job = heads_job(an, head_kind)
+        out['heads'] = {}
+        if job is not None:
+            text, heads = job
+            keys = block_keys(an.blocks)
+            try:
+                r = llm.ask('heavy', SYSTEM_HEADS, text, HeadReview, max_tokens=32000)
+            except ContentBlocked:
+                r = None
+            except LLMError as e:
+                out['errors'].append(str(e))
+                r = None
+            for ch in (r.changes if r else []):
+                if 1 <= ch.n <= len(heads):
+                    out['heads'][keys[heads[ch.n - 1].idx]] = ch.model_dump(exclude={'n'})
     with ThreadPoolExecutor(max_workers=max(1, llm.settings.max_workers)) as pool:
         for bucket, key, v, err in pool.map(one, jobs):
             if err:

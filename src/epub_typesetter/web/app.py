@@ -159,6 +159,8 @@ def get_board(pid: str):
             it['llm'] = (llm.get('items') or {}).get(it['key'])
     for sg in data['suggestions']:
         sg['llm'] = (llm.get('items') or {}).get(sg.get('key'))
+    for h in data.get('heads', []):
+        h['llm'] = (llm.get('heads') or {}).get(h['key'])
     data['llm'] = {'usage': llm.get('usage'), 'errors': llm.get('errors', []), 'models': llm.get('models'),
                    'base_url': llm.get('base_url')} if llm else None
     return {**data, 'decisions': board.load(store.path(pid, 'decisions.json'))}

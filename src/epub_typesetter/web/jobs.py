@@ -185,7 +185,7 @@ def is_epub_like(data: bytes) -> bool:
 
 
 
-LLM_TASKS = {'clusters', 'structures'}
+LLM_TASKS = {'clusters', 'structures', 'heads'}
 
 
 def llm(pid: str, wanted: list[str], prev: str = 'fixed') -> None:

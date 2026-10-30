@@ -7,7 +7,8 @@
   suggestions  C 级建议：默认不执行，勾选后按模板改写；不能执行的只作提示
 
 用户的决定存成 decisions：
-  {"version": 1, "clusters": {簇键: 角色}, "kinds": {类别: 是否接受}, "items": {结构或建议的键: 是否接受}}
+  {"version": 1, "clusters": {簇键: 角色}, "kinds": {类别: 是否接受}, "items": {结构或建议的键: 是否接受},
+   "heads": {块键: part/chapter/section/subsection/para}, "matter": {块键: 辅文类型}}
 建议的类别在 kinds/items 里以「s-」开头（如 s-poem），与已识别的结构区分。
 """
 from __future__ import annotations
@@ -16,7 +17,9 @@ import json
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from .semantic import CLUSTER_ROLES, REASSIGNABLE, Analysis, cluster_key
+from .semantic import CLUSTER_ROLES, MATTERS, REASSIGNABLE, Analysis, block_keys, cluster_key
+
+HEAD_KINDS = ('part', 'chapter', 'section', 'subsection', 'para')
 
 DECISIONS_VERSION = 1
 ROLE_LABELS = {'para': '正文', 'quote': '引文', 'center': '居中短行', 'right': '右对齐', 'chapter': '章标题',
@@ -30,7 +33,7 @@ MAX_ITEMS = 2000
 
 
 def empty() -> dict:
-    return {'version': DECISIONS_VERSION, 'clusters': {}, 'kinds': {}, 'items': {}}
+    return {'version': DECISIONS_VERSION, 'clusters': {}, 'kinds': {}, 'items': {}, 'heads': {}, 'matter': {}}
 
 
 def load(path: str | Path) -> dict:
@@ -39,7 +42,7 @@ def load(path: str | Path) -> dict:
         return empty()
     d = json.loads(p.read_text(encoding='utf-8'))
     out = empty()
-    for k in ('clusters', 'kinds', 'items'):
+    for k in ('clusters', 'kinds', 'items', 'heads', 'matter'):
         if isinstance(d.get(k), dict):
             out[k] = d[k]
     return out
@@ -55,6 +58,12 @@ def clean(d: dict) -> dict:
         for k, v in (d.get(part) or {}).items():
             if isinstance(k, str) and isinstance(v, bool):
                 out[part][k] = v
+    for k, v in (d.get('heads') or {}).items():
+        if isinstance(k, str) and v in HEAD_KINDS:
+            out['heads'][k] = v
+    for k, v in (d.get('matter') or {}).items():
+        if isinstance(k, str) and v in MATTERS:
+            out['matter'][k] = v
     return out
 
 
@@ -128,5 +137,16 @@ def build(an: Analysis, head_kind: dict, decisions: dict | None = None) -> dict:
             'decided': decisions['items'].get(sg.get('key')) if sg.get('key') else None,
             'lines': [blocks[i].text[:60] for i in sg.get('blocks', [])[:4]],
         })
-    return {'clusters': clusters, 'roles': [{'value': r, 'label': ROLE_LABELS[r]} for r in CLUSTER_ROLES],
+    # 4) 标题（供大模型的层级建议对照、逐个改）
+    keys = block_keys(blocks)
+    heads = []
+    for b in blocks:
+        if b.role == 'heading' or keys[b.idx] in decisions['heads']:
+            kind = head_kind.get(b.idx)
+            cur = {'part': 'part', 'chapter': 'chapter'}.get(kind) or (
+                'subsection' if b.attrs.get('force') == 'subsection' else 'section') if b.role == 'heading' else 'para'
+            heads.append({'key': keys[b.idx], 'text': b.text[:60], 'doc': b.doc.rsplit('/', 1)[-1], 'kind': cur,
+                          'matter': b.attrs.get('matter', ''), 'decided': decisions['heads'].get(keys[b.idx]),
+                          'decided_matter': decisions['matter'].get(keys[b.idx])})
+    return {'heads': heads[:MAX_ITEMS], 'clusters': clusters, 'roles': [{'value': r, 'label': ROLE_LABELS[r]} for r in CLUSTER_ROLES],
             'structures': sorted(kinds.values(), key=lambda k: -k['total']), 'suggestions': sugg}

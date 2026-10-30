@@ -315,6 +315,43 @@ def cluster_key(b: Block) -> str:
                      b.align, f'i{int(b.indent)}'))
 
 
+def block_keys(blocks: list[Block]) -> dict[int, str]:
+    """每块的稳定键（文件 + 文字摘要 + 同文第几次）：确认板上逐块的决定靠它对上。"""
+    import hashlib
+    seen: Counter = Counter()
+    out = {}
+    for b in blocks:
+        base = f'{b.doc}:{hashlib.sha1(b.text.encode()).hexdigest()[:10]}'
+        seen[base] += 1
+        out[b.idx] = base if seen[base] == 1 else f'{base}#{seen[base]}'
+    return out
+
+
+MATTERS = ('preface', 'foreword', 'introduction', 'prologue', 'epilogue', 'afterword', 'acknowledgments', 'appendix',
+           'bibliography', 'glossary', 'dedication', 'epigraph', 'copyright')
+
+
+def apply_block_roles(blocks: list[Block], heads: dict[str, str], matter: dict[str, str]) -> None:
+    """确认板上逐块的决定：标题级别（part/chapter/section/subsection/para）与辅文类型。"""
+    if not heads and not matter:
+        return
+    keys = block_keys(blocks)
+    for b in blocks:
+        k = keys[b.idx]
+        role = heads.get(k)
+        if role in ('part', 'chapter', 'section', 'subsection') and b.role in REASSIGNABLE + ('heading',):
+            b.role, b.level, b.attrs['force'] = 'heading', {'part': 1, 'chapter': 1}.get(role, 2), role
+            b.reason = f'用户确认：{role}'
+        elif role == 'para' and b.role == 'heading':
+            if b.merged >= 0:
+                blocks[b.merged].role = 'para'
+                b.merged = -1
+                b.verify = squash(''.join(b.el.itertext()))
+            b.role, b.reason = 'para', '用户确认：不是标题'
+        if matter.get(k) in MATTERS:
+            b.attrs['matter'] = matter[k]
+
+
 def apply_cluster_roles(blocks: list[Block], clusters: dict[str, str]) -> None:
     """按用户在确认板上给的整簇角色改写块角色。"""
     if not clusters:
@@ -557,6 +594,7 @@ def analyze(book: Book, decisions: dict | None = None) -> Analysis:
         elif _local(b.el.tag) == 'blockquote':
             b.role, b.reason = 'quote', '原有 <blockquote>'
     apply_cluster_roles(blocks, decisions.get('clusters') or {})
+    apply_block_roles(blocks, decisions.get('heads') or {}, decisions.get('matter') or {})
     an = Analysis(blocks, toc, noterefs, junk_docs, is_vertical(book))
     # 9) 成组结构：诗歌、书信、列表、条文、插图目录、表题表注、术语表（structures.py），再按用户取舍
     from .structures import detect

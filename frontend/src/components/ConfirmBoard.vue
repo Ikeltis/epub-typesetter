@@ -9,14 +9,14 @@ const emit = defineEmits(['rebuild', 'started'])
 const data = ref(null)
 const error = ref('')
 const saving = ref(false)
-const d = ref({ clusters: {}, kinds: {}, items: {} })   // 正在编辑的决定
+const d = ref({ clusters: {}, kinds: {}, items: {}, heads: {}, matter: {} })   // 正在编辑的决定
 const open = ref({})                                     // 展开的结构类别
 const showSmall = ref(false)
 
 async function load() {
   try {
     data.value = await api.board(props.pid)
-    d.value = JSON.parse(JSON.stringify(data.value.decisions))
+    d.value = { heads: {}, matter: {}, ...JSON.parse(JSON.stringify(data.value.decisions)) }
     error.value = ''
   } catch (e) { data.value = null; error.value = e.message }
 }
@@ -56,7 +56,23 @@ function toggleSugg(s, on) {
 
 const dirty = computed(() => data.value && JSON.stringify(d.value) !== JSON.stringify(data.value.decisions))
 const changed = computed(() => Object.keys(d.value.clusters).length + Object.keys(d.value.kinds).length
-  + Object.keys(d.value.items).length)
+  + Object.keys(d.value.items).length + Object.keys(d.value.heads).length + Object.keys(d.value.matter).length)
+
+// ---- 标题层级与辅文 ----
+const HEAD_KINDS = [['part', '部'], ['chapter', '章'], ['section', '节'], ['subsection', '小节'], ['para', '不是标题']]
+const MATTER = [['', '正文章节'], ['preface', '前言/序'], ['foreword', '他序'], ['introduction', '导言'], ['prologue', '楔子'],
+  ['epilogue', '尾声'], ['afterword', '后记/跋'], ['acknowledgments', '致谢'], ['appendix', '附录'],
+  ['bibliography', '参考文献'], ['glossary', '术语表'], ['dedication', '献辞'], ['epigraph', '题词'], ['copyright', '版权页']]
+const headLabel = (k) => HEAD_KINDS.find((x) => x[0] === k)?.[1] || k
+const matterLabel = (k) => MATTER.find((x) => x[0] === k)?.[1] || k
+const headKind = (h) => d.value.heads[h.key] ?? h.kind
+const headMatter = (h) => d.value.matter[h.key] ?? h.matter
+function setHead(h, v) { if (v === h.kind && !h.decided) delete d.value.heads[h.key]; else d.value.heads[h.key] = v }
+function setMatter(h, v) { if (v === h.matter && !h.decided_matter) delete d.value.matter[h.key]; else d.value.matter[h.key] = v }
+const headDiffers = (h) => h.llm && (h.llm.kind !== headKind(h) || (h.llm.matter || '') !== (headMatter(h) || ''))
+function adoptHead(h) { if (h.llm) { setHead(h, h.llm.kind); if (h.llm.matter || headMatter(h)) setMatter(h, h.llm.matter || '') } }
+const showHeads = ref(false)
+const headsShown = computed(() => (data.value?.heads || []).filter((h) => showHeads.value || h.llm || h.key in d.value.heads || h.key in d.value.matter))
 
 async function save() {
   saving.value = true
@@ -65,10 +81,10 @@ async function save() {
     emit('rebuild')
   } catch (e) { error.value = e.message } finally { saving.value = false }
 }
-function reset() { d.value = { clusters: {}, kinds: {}, items: {} } }
+function reset() { d.value = { clusters: {}, kinds: {}, items: {}, heads: {}, matter: {} } }
 
 // ---- 大模型 ----
-const llmTasks = ref({ clusters: true, structures: true })
+const llmTasks = ref({ clusters: true, structures: true, heads: true })
 const roleLabel = (r) => data.value?.roles.find((x) => x.value === r)?.label || r
 const pct = (c) => `${Math.round(c * 100)}%`
 async function runLlm() {
@@ -89,12 +105,14 @@ const pending = computed(() => {
   if (!data.value?.llm) return 0
   let n = data.value.clusters.filter(clusterDiffers).length
   for (const k of data.value.structures) n += k.items.filter((it) => itemDiffers(k, it)).length
+  n += (data.value.heads || []).filter(headDiffers).length
   return n + actionable.value.filter(suggDiffers).length
 })
 function adoptAll(min = 0.8) {
   for (const c of data.value.clusters) if (clusterDiffers(c) && c.llm.confidence >= min) adoptCluster(c)
   for (const k of data.value.structures) for (const it of k.items) if (itemDiffers(k, it) && it.llm.confidence >= min) adoptItem(k, it)
   for (const s of actionable.value) if (suggDiffers(s) && s.llm.confidence >= min) adoptSugg(s)
+  for (const h of data.value.heads || []) if (headDiffers(h) && h.llm.confidence >= min) adoptHead(h)
 }
 </script>
 
@@ -115,6 +133,7 @@ function adoptAll(min = 0.8) {
         <strong>大模型分析</strong>
         <label class="small"><input v-model="llmTasks.clusters" type="checkbox" /> 段落样式</label>
         <label class="small"><input v-model="llmTasks.structures" type="checkbox" /> 结构与建议</label>
+        <label class="small" title="用重型模型，一次看全书标题"><input v-model="llmTasks.heads" type="checkbox" /> 标题层级与辅文</label>
         <span class="spacer"></span>
         <button :disabled="busy || !Object.values(llmTasks).some(Boolean)" @click="runLlm">{{ data.llm ? '重新分析' : '开始分析' }}</button>
         <a href="#/settings" class="small">设置</a>
@@ -122,7 +141,7 @@ function adoptAll(min = 0.8) {
       <p class="muted small">会把每组、每处的几段样例（不是整本书）发给大模型；同样的内容只问一次。大模型只给建议，点「采纳」后才写进决定。</p>
       <template v-if="data.llm">
         <p class="small">
-          {{ data.llm.models?.light }}：调用 {{ data.llm.usage.calls }} 次，命中缓存 {{ data.llm.usage.cached }} 次<template v-if="data.llm.usage.blocked">，被接口方内容审核拦下 {{ data.llm.usage.blocked }} 条</template><template v-if="data.llm.usage.refused">，拒答 {{ data.llm.usage.refused }} 条</template>；
+          {{ data.llm.models?.light }} / {{ data.llm.models?.heavy }}：调用 {{ data.llm.usage.calls }} 次，命中缓存 {{ data.llm.usage.cached }} 次<template v-if="data.llm.usage.blocked">，被接口方内容审核拦下 {{ data.llm.usage.blocked }} 条</template><template v-if="data.llm.usage.refused">，拒答 {{ data.llm.usage.refused }} 条</template>；
           按官方价估算约 ${{ data.llm.usage.cost.toFixed(4) }}<span class="muted">（{{ data.llm.base_url }}，走中转时以中转计费为准）</span>
         </p>
         <p v-for="(e, i) in data.llm.errors" :key="i" class="notice error small">{{ e }}</p>
@@ -161,6 +180,28 @@ function adoptAll(min = 0.8) {
         </tr>
       </tbody>
     </table>
+
+    <h3>标题（{{ data.heads?.length || 0 }} 个）</h3>
+    <p class="muted small">决定每个标题的级别，以及章一级的辅文类型（前言、后记等，影响语义标注和导航）。
+      默认只列大模型有意见或你改过的；<a href="#" @click.prevent="showHeads = !showHeads">{{ showHeads ? '只看有意见的' : '列出全部标题' }}</a>。</p>
+    <table v-if="headsShown.length" class="items"><tbody>
+      <tr v-for="h in headsShown.slice(0, 600)" :key="h.key" :class="{ changed: h.key in d.heads || h.key in d.matter }">
+        <td>{{ h.text }}</td>
+        <td class="small muted mono">{{ h.doc }}</td>
+        <td><select :value="headKind(h)" @change="setHead(h, $event.target.value)">
+          <option v-for="[v, l] in HEAD_KINDS" :key="v" :value="v">{{ l }}</option></select></td>
+        <td><select v-if="['chapter', 'part'].includes(headKind(h))" :value="headMatter(h)" @change="setMatter(h, $event.target.value)">
+          <option v-for="[v, l] in MATTER" :key="v" :value="v">{{ l }}</option></select></td>
+        <td v-if="data.llm" class="small llm-cell">
+          <template v-if="h.llm">
+            {{ headLabel(h.llm.kind) }}<template v-if="h.llm.matter"> · {{ matterLabel(h.llm.matter) }}</template>
+            <span class="muted">{{ pct(h.llm.confidence) }}</span>
+            <button v-if="headDiffers(h)" class="link" @click="adoptHead(h)">采纳</button>
+            <div class="muted reason">{{ h.llm.reason }}</div>
+          </template>
+        </td>
+      </tr>
+    </tbody></table>
 
     <h3>识别出的结构</h3>
     <p v-if="!data.structures.length" class="muted small">这本书没有识别出诗歌、书信、列表等结构。</p>

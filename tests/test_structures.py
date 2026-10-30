@@ -316,7 +316,24 @@ def test_board_glossary_lines_and_tfoot():
 def test_decisions_clean_rejects_garbage():
     d = board.clean({'clusters': {'a': 'quote', 'b': 'evil'}, 'kinds': {'poem': 'yes'}, 'items': {'x': False},
                      'extra': 1})
-    assert d == {'version': 1, 'clusters': {'a': 'quote'}, 'kinds': {}, 'items': {'x': False}}
+    assert d == {'version': 1, 'clusters': {'a': 'quote'}, 'kinds': {}, 'items': {'x': False}, 'heads': {}, 'matter': {}}
+    d = board.clean({'heads': {'k': 'section', 'j': 'h7'}, 'matter': {'k': 'afterword', 'j': 'evil'}})
+    assert d['heads'] == {'k': 'section'} and d['matter'] == {'k': 'afterword'}
+
+
+def test_board_heads_and_matter():
+    c1 = '<h1>第一章</h1>' + P + '<h2>不是标题的短句</h2>' + P
+    c2 = '<h1>写在后面</h1>' + P
+
+    def decide(bd):
+        k = {h['text']: h['key'] for h in bd['heads']}
+        assert bd['heads'][0]['kind'] == 'chapter'
+        return {'heads': {k['不是标题的短句']: 'para'}, 'matter': {k['写在后面']: 'afterword'}}
+    out, rep, bd = rebuild_with(c1, decide, c2)
+    _, p = find(out, lambda e: e.text == '不是标题的短句')
+    assert p.tag == X + 'p'
+    path, sec = find(out, lambda e: e.tag == X + 'section' and e.get(EPUB_T) == 'afterword')
+    assert sec is not None and sec.get('role') == 'doc-afterword' and path.endswith('afterword.xhtml')
 
 
 # ---------- 注释配对：注号与注文互相链接（04 4.12.5） ----------

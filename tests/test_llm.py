@@ -154,3 +154,16 @@ def _wait(c, pid, done, timeout=120):
             return d
         time.sleep(.2)
     raise AssertionError('timeout')
+
+
+def test_heads_task_uses_heavy_model(tmp_path):
+    c1 = '<h1>序</h1><p>正文。</p><h1>第一章</h1><p>正文。</p><h1>第二章</h1><p>正文。</p>'
+    rep = optimize(Book.load(make_epub({'OEBPS/Text/c1.xhtml': XHTML11.format(title='一', body=c1)})))
+    llm = fake_llm(tmp_path, lambda kw: {'changes': [{'n': 1, 'kind': 'chapter', 'matter': 'preface',
+                                                      'confidence': .9, 'reason': '序言'},
+                                                     {'n': 99, 'kind': 'para', 'confidence': .9, 'reason': '越界'}]})
+    out = tasks.run(llm, rep.analysis, rep.rebuild.head_kind, {'heads'})
+    call = llm.client.messages.calls[0]
+    assert call['model'] == 'claude-opus-5-5' and call['output_config'] == {'effort': 'medium'}
+    assert '1. [chapter] 序' in call['messages'][0]['content']
+    assert list(out['heads'].values()) == [{'kind': 'chapter', 'matter': 'preface', 'confidence': .9, 'reason': '序言'}]

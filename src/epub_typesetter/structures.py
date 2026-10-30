@@ -63,6 +63,15 @@ PLAIN = ('para', 'quote', 'center', 'right')
 LISTABLE = ('para', 'quote')                 # 引文里的序号段同样成列表
 
 
+def _vtext(b) -> str:
+    """块的期望文字：已去掉配上的注号（semantic 第 5 步设的 verify），否则原文。"""
+    return b.verify if b.verify is not None else b.text
+
+
+def _ref_labels(ctx, el) -> list[str]:
+    return [''.join(a.itertext()) for a in el.iter(X + 'a') if id(a) in ctx.ref_ids]
+
+
 def _local(el) -> str:
     return el.tag.rsplit('}', 1)[-1] if isinstance(el.tag, str) else ''
 
@@ -122,6 +131,7 @@ class _Ctx:
         self._main: dict[str, tuple[str, float]] = {}
         self._keys: Counter = Counter()
         self.orig = {b.idx: b.role for b in an.blocks}       # 识别前的角色：用户拒绝某个结构时还原
+        self.ref_ids = {id(a) for refs in an.noterefs.values() for a in refs}
 
     def key(self, kind: str, b) -> str:
         """稳定键：同一本原书每次分析都一样，确认板的决定靠它对上。"""
@@ -276,7 +286,11 @@ def make_poem(ctx: _Ctx, run: list, title, author, level: str, hinted: bool = Fa
         c.attrs['indents'] = indents[k:k + n]
         c.reason = f'诗歌（{level}）'
         if n > 1 or c.el.find('.//' + X + 'br') is not None:   # 按 br 拆行后，行首缩进空格去掉
-            c.verify = ''.join(t for t, _ in _poem_lines(c))
+            v = ''.join(t for t, _ in _poem_lines(c))
+            for lab in _ref_labels(ctx, c.el):               # 配上的注号会换成新编号
+                i = v.rfind(lab)
+                v = v[:i] + v[i + len(lab):] if i >= 0 else v
+            c.verify = v
         k += n
     for blk, part in ((title, 'title'), (author, 'author'), (attribution, 'attribution')):
         if blk is not None:
@@ -393,7 +407,7 @@ def detect_lists(ctx: _Ctx) -> None:
             u = ctx.unit('ol', run[0], level='B', start=nums[0])
             for c in run:
                 c.role, c.unit, c.part, c.reason = 'ol', u, 'li', '阿拉伯数字序号段'
-                c.verify = OL_NUM.sub('', c.text.strip(), count=1)
+                c.verify = OL_NUM.sub('', _vtext(c).strip(), count=1)
         i = j
     # 中文序号项：同组连续 ≥2 段；悬挂宽度取组内最长序号（04 4.10.2.2）
     i = 0
@@ -423,7 +437,7 @@ def detect_lists(ctx: _Ctx) -> None:
             if b.doc not in units:
                 units[b.doc] = ctx.unit('article', b, level='A')
             b.role, b.unit, b.reason = 'article', units[b.doc], '法规条文'
-            b.verify = ARTICLE.sub(lambda m: m.group(1) + '　', b.text.strip(), count=1)
+            b.verify = ARTICLE.sub(lambda m: m.group(1) + '　', _vtext(b).strip(), count=1)
 
 
 def detect_dl(ctx: _Ctx) -> None:
@@ -569,7 +583,7 @@ def apply_decisions(ctx: _Ctx, decisions: dict) -> None:
                 m = TERM_LINE.match(b.text)
                 term = m.group(1)
                 b.role, b.unit, b.part, b.attrs['term'] = 'gloss', u, 'line', term
-                b.verify = term + re.sub(r'^[：:—]+', '', b.text.strip()[len(term):])
+                b.verify = term + re.sub(r'^[：:—]+', '', _vtext(b).strip()[len(term):])
         elif sg['kind'] == 'script' and blocks:
             u = ctx.unit('script', blocks[0], level='C', cast=sg.get('cast', []))
             for b in blocks:
@@ -577,7 +591,7 @@ def apply_decisions(ctx: _Ctx, decisions: dict) -> None:
                 if m and m.group(1) in sg.get('cast', []):
                     name = m.group(1)
                     b.role, b.unit, b.attrs['persona'] = 'dialogue', u, name
-                    b.verify = name + '：' + b.text.strip()[len(name) + 1:]
+                    b.verify = name + '：' + _vtext(b).strip()[len(name) + 1:]
                 else:
                     b.role, b.unit = 'stage', u
 

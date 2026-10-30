@@ -317,3 +317,29 @@ def test_decisions_clean_rejects_garbage():
     d = board.clean({'clusters': {'a': 'quote', 'b': 'evil'}, 'kinds': {'poem': 'yes'}, 'items': {'x': False},
                      'extra': 1})
     assert d == {'version': 1, 'clusters': {'a': 'quote'}, 'kinds': {}, 'items': {'x': False}}
+
+
+# ---------- 注释配对：注号与注文互相链接（04 4.12.5） ----------
+
+def test_mutual_link_notes_bare_digits_and_shared_labels():
+    body = ('<h1>第一章</h1>' + P +
+            '<p>正文甲<a id="z1" href="c2.xhtml#bz1">1</a>继续，正文乙<a id="z2" href="c2.xhtml#bz2">2</a>结束。</p>' + P)
+    notes = ('<h1>第二章</h1>' + P + '<p><b>第一章　注释</b></p>'
+             '<p class="zhu"><a id="bz1" href="c1.xhtml#z1">[1]</a><a id="bz2" href="c1.xhtml#z2">[2]</a>《某书》，某社出版。</p>')
+    out, rep, _ = rebuild(body, notes)
+    assert rep.rebuild.notes == 1                                   # 两个注号共用一条注文
+    _, li = find(out, lambda e: e.tag == X + 'li' and e.get('id') == 'note-1')
+    assert ''.join(li.itertext()).startswith('《某书》')               # 开头的「[1][2]」都去掉
+    refs = [a for r in docs(out).values() for a in r.iter(X + 'a') if a.get('class') == 'noteref']
+    assert [a.get('id') for a in refs] == ['noteref-1', 'noteref-1-2']
+    assert ('note-head', '第一章　注释') in rep.rebuild.removed
+
+
+def test_backlink_direction_does_not_make_body_a_note():
+    """注文的回链指着正文段落：正文段落中间有注号，不能反过来被当成注文（红楼梦的写法）。"""
+    body = ('<h1>第一章</h1>' + P + '<p>正文<a id="ref1" href="c1.xhtml#back1"><sup>①</sup></a>继续写。</p>' + P +
+            '<p><a id="back1" href="c1.xhtml#ref1">①</a>这是校记。</p>')
+    out, rep, _ = rebuild(body)
+    assert rep.rebuild.notes == 1
+    _, p = find(out, lambda e: e.tag == X + 'p' and '继续写' in ''.join(e.itertext()))
+    assert p is not None and p.find(f'.//{X}a').get('class') == 'noteref'

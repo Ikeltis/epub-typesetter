@@ -44,6 +44,7 @@ CHAPTER_RE = re.compile(r'^(第[一二三四五六七八九十百千零〇\d]+[�
 TOC_TITLES = {'目录', '目次', 'contents', 'tableofcontents', '目录contents'}
 NOTE_TITLES = {'注释', '注', '注解', '注释与参考', '尾注', '脚注', '译注', 'notes'}
 BULLET_RE = re.compile(r'^[●•◆◇■□▪▫○◎※►▶➢✓✔]\s*')
+NOTE_HEAD_RE = re.compile(r'^.{0,16}(注释|注解|尾注|译注|注)$')   # 「第一章　注释」这类注释区小标题
 NOTE_LABEL_RE = re.compile(r'^\s*(\[\d{1,3}\]|［\d{1,3}］|\(\d{1,3}\)|（\d{1,3}）|[①-⑳]|注\d{1,3}[：:.．]?)')
 CAPTION_RE = re.compile(r'^(图|表|插图|figure|fig\.?|table)\s*[\d一二三四五六七八九十]', re.I)
 SOURCE_RE = re.compile(r'^(资料来源|数据来源|来源|出处|图片来源|source)[：:]', re.I)
@@ -424,22 +425,57 @@ def analyze(book: Book, decisions: dict | None = None) -> Analysis:
                 for b in heads:
                     b.level = 1 if b.level <= lv else b.level - lv + 1
 
-    # 5) 注释：短链接 [n] → 目标块以同一编号开头
+    # 5) 注释：短链接 [n] → 目标块以同一编号开头；或者注号与注文互相链接（注号只是数字也算，04 4.12.5）
     by_anchor = {(b.doc, a): b for b in blocks for a in b.anchors}
     noterefs: dict[int, list] = {}
+
+    def links_back(target, doc, ref_id) -> bool:
+        """注文开头有链接指回这个注号（前面只允许别的注号，如共用注文的「[1][2][3]」）。
+        要求在开头，是为了分清方向：正文段落中间的注号也会被注文的回链指着，它不是注文。"""
+        if not ref_id:
+            return False
+        for x in target.el.iter(X + 'a'):
+            href = x.get('href') or ''
+            if href.partition('#')[2] == ref_id and not is_external(href) and Book.resolve(target.doc, href) == doc:
+                full = ''.join(target.el.itertext())
+                lead = full[:full.find(''.join(x.itertext()))] if ''.join(x.itertext()) in full else full
+                return bool(re.fullmatch(r'(\[\d{1,3}\]|［\d{1,3}］|\d{1,3}[.．]?|[①-⑳]|\s)*', lead))
+        return False
     for b in blocks:
         if b.role in ('toc', 'heading'):
             continue
         for a in b.el.iter(X + 'a'):
             label = _norm(''.join(a.itertext()))
             href = a.get('href', '')
-            if not href or is_external(href) or '#' not in href or not NOTE_LABEL_RE.fullmatch(label or 'x'):
+            if not href or is_external(href) or '#' not in href or len(label) > 6:
                 continue
             target = by_anchor.get((Book.resolve(b.doc, href), href.partition('#')[2]))
-            if target is None or target is b or not _norm(target.text).startswith(label):
+            if target is None or target is b:
+                continue
+            labelled = NOTE_LABEL_RE.fullmatch(label or 'x') and _norm(target.text).startswith(label)
+            mutual = (NOTE_LABEL_RE.fullmatch(label or 'x') or re.fullmatch(r'\d{1,3}[.．]?|\*{1,3}|†', label or 'x')) \
+                and links_back(target, b.doc, a.get('id'))
+            if not (labelled or mutual):
                 continue
             target.role, target.reason = 'note', f'被正文注号 {label} 指向'
             noterefs.setdefault(target.idx, []).append(a)
+    # 配上的注号在重建时换成新编号：文字校验不算原注号的字（[n] 已由校验本身归一，裸数字注号要在这里去掉）
+    ref_ids = {id(a) for refs in noterefs.values() for a in refs}
+    for b in blocks:
+        if b.role in ('toc', 'heading') or not any(id(a) in ref_ids for a in b.el.iter(X + 'a')):
+            continue
+        parts = []
+
+        def walk(el):
+            if id(el) in ref_ids:
+                return
+            parts.append(el.text or '')
+            for c in el:
+                if isinstance(c.tag, str):
+                    walk(c)
+                parts.append(c.tail or '')
+        walk(b.el)
+        b.verify = squash(''.join(parts))
     # 多段注：注释段之后、下一条注或标题之前，字号与注释相同的段落是续段（04 4.12.3.3）
     for b in blocks:
         if b.role != 'note':
@@ -453,7 +489,7 @@ def analyze(book: Book, decisions: dict | None = None) -> Analysis:
             nb.role, nb.group, nb.reason = 'note-cont', b.idx, '注释的续段'
             j += 1
     for b in blocks:
-        if b.role == 'para' and _norm(b.text) in NOTE_TITLES:
+        if b.role == 'para' and (_norm(b.text) in NOTE_TITLES or NOTE_HEAD_RE.match(_norm(b.text))):
             nxt = blocks[b.idx + 1] if b.idx + 1 < len(blocks) else None
             if nxt is not None and nxt.role == 'note':
                 b.role, b.reason = 'note-head', '注释区小标题'

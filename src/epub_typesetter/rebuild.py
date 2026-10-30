@@ -1063,18 +1063,22 @@ class Rebuilder:
             li = etree.SubElement(ol, X + 'li', {'id': f'note-{num}'})
             p = etree.SubElement(li, X + 'p')
             body_src = copy.deepcopy(b.el)
-            for a in list(body_src.iter(X + 'a')):         # 去掉原来的「[n]」回链（编号由 ol 自动生成）
-                if NOTE_LABEL_RE.fullmatch(re.sub(r'\s+', '', ''.join(a.itertext())) or 'x'):
-                    tail = a.tail
-                    parent = a.getparent()
-                    prev = a.getprevious()
-                    parent.remove(a)
-                    if tail:
-                        if prev is not None:
-                            prev.tail = (prev.tail or '') + tail
-                        else:
-                            parent.text = (parent.text or '') + tail
+            # 去掉原来的「[n]」回链（编号由 ol 自动生成）；几处注号共用一条注文时开头是「[1][2][3]」，都去掉
+            for a in list(body_src.iter(X + 'a')):
+                before = (a.getparent().text or '') if a.getprevious() is None else (a.getprevious().tail or '')
+                if before.strip() and a is not next(body_src.iter(X + 'a')):
+                    break                                  # 正文里的链接不动，只去开头那一串
+                if not NOTE_LABEL_RE.fullmatch(re.sub(r'\s+', '', ''.join(a.itertext())) or 'x'):
                     break
+                tail = a.tail
+                parent = a.getparent()
+                prev = a.getprevious()
+                parent.remove(a)
+                if tail:
+                    if prev is not None:
+                        prev.tail = (prev.tail or '') + tail
+                    else:
+                        parent.text = (parent.text or '') + tail
             self.inline(body_src, p, NOTE_LABEL_RE, sized=True)
             last = p
             for nb in (x for x in self.an.blocks if x.role == 'note-cont' and x.group == b.idx):   # 多段注保留块结构

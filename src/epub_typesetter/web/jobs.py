@@ -15,7 +15,7 @@ from . import store
 
 EPUBCHECK_LOCALE = os.environ.get('EPUBTS_EPUBCHECK_LOCALE', 'zh-TW')
 MAX_MESSAGES = 300
-BUSY = ('queued', 'auditing', 'fixing')
+BUSY = ('queued', 'auditing', 'fixing', 'thinking')
 _pool = ThreadPoolExecutor(max_workers=int(os.environ.get('EPUBTS_WORKERS', '2')))
 
 
@@ -183,3 +183,29 @@ def fix(pid: str, mode: str = 'basic') -> None:
 def is_epub_like(data: bytes) -> bool:
     return data[:2] == b'PK'
 
+
+
+LLM_TASKS = {'clusters', 'structures'}
+
+
+def llm(pid: str, wanted: list[str], prev: str = 'fixed') -> None:
+    """大模型分析：对当前确认板（按已保存的决定重新分析）逐项给判断，结果写 llm.json，不改书。"""
+    from ..llm import tasks as llm_tasks
+    from ..llm.client import LLM, LLMError
+    from ..llm.settings import LLMSettings
+    store.update(pid, status='thinking', message='大模型分析：准备中')
+    try:
+        client = LLM(LLMSettings.load(store.root()), os.path.join(store.root(), 'llm-cache'))
+        book = Book.load(store.path(pid, 'original.epub'))
+        decisions = board.load(store.path(pid, 'decisions.json'))
+        orep = optimize(book, decisions=decisions)
+
+        def progress(done, total):
+            if done % 3 == 0 or done == total:
+                store.update(pid, message=f'大模型分析：{done}/{total}')
+        res = llm_tasks.run(client, orep.analysis, orep.rebuild.head_kind, set(wanted) & LLM_TASKS, progress)
+        res['base_url'] = client.settings.effective_base_url
+        store.write_json(pid, 'llm.json', res)
+        store.update(pid, status=prev, message='')
+    except LLMError as e:
+        store.update(pid, status=prev, message=f'大模型分析没有完成：{e}')

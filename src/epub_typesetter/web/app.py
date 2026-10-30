@@ -14,6 +14,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .. import __version__, board, engine, epubcheck
+from ..llm.client import LLM, LLMError
+from ..llm.settings import LLMSettings
 from ..waivers import WaiverFileError, WaiverSet
 from . import jobs, store
 
@@ -144,12 +146,59 @@ def delete_waiver(pid: str, wid: str):
 
 @app.get('/api/books/{pid}/board')
 def get_board(pid: str):
-    """确认板：上次排版重建时识别出的段落样式簇、结构、建议，以及用户已保存的决定。"""
+    """确认板：上次排版重建时识别出的段落样式簇、结构、建议，以及用户已保存的决定和大模型的判断。"""
     _meta_or_404(pid)
     data = store.read_json(pid, 'board.json')
     if data is None:
         raise HTTPException(404, '还没有确认板，请先做一次排版重建')
+    llm = store.read_json(pid, 'llm.json') or {}
+    for c in data['clusters']:
+        c['llm'] = (llm.get('clusters') or {}).get(c['key'])
+    for k in data['structures']:
+        for it in k['items']:
+            it['llm'] = (llm.get('items') or {}).get(it['key'])
+    for sg in data['suggestions']:
+        sg['llm'] = (llm.get('items') or {}).get(sg.get('key'))
+    data['llm'] = {'usage': llm.get('usage'), 'errors': llm.get('errors', []), 'models': llm.get('models'),
+                   'base_url': llm.get('base_url')} if llm else None
     return {**data, 'decisions': board.load(store.path(pid, 'decisions.json'))}
+
+
+@app.post('/api/books/{pid}/llm', status_code=202)
+def run_llm(pid: str, body: dict):
+    """大模型分析（后台）。body: {"tasks": ["clusters", "structures"]}。"""
+    meta = _idle_or_409(pid)
+    if store.read_json(pid, 'board.json') is None:
+        raise HTTPException(409, '请先做一次排版重建，生成确认板')
+    wanted = [t for t in body.get('tasks') or [] if t in jobs.LLM_TASKS]
+    if not wanted:
+        raise HTTPException(400, '至少选一项分析任务')
+    s = LLMSettings.load(store.root())
+    if not s.enabled or not s.has_credentials:
+        raise HTTPException(400, '大模型未启用或没有配置令牌，请先到「大模型设置」')
+    store.update(pid, status='thinking', message='大模型分析：排队中')
+    jobs.submit(jobs.llm, pid, wanted, meta.status)
+    return {'ok': True}
+
+
+# ---------- 大模型设置（全局） ----------
+
+@app.get('/api/settings/llm')
+def get_llm_settings():
+    return LLMSettings.load(store.root()).public()
+
+
+@app.put('/api/settings/llm')
+def put_llm_settings(body: dict):
+    return LLMSettings.load(store.root()).save(store.root(), body).public()
+
+
+@app.post('/api/settings/llm/test')
+def test_llm_settings():
+    try:
+        return LLM(LLMSettings.load(store.root())).ping()
+    except LLMError as e:
+        raise HTTPException(400, str(e)) from None
 
 
 @app.put('/api/books/{pid}/decisions')
@@ -182,7 +231,7 @@ def download(pid: str, which: str = 'fixed'):
 @app.delete('/api/books/{pid}', status_code=204)
 def delete_book(pid: str):
     meta = _meta_or_404(pid)
-    if meta.status in ('auditing', 'fixing'):
+    if meta.status in jobs.BUSY:
         raise HTTPException(409, '这本书正在处理中')
     store.delete(pid)
 

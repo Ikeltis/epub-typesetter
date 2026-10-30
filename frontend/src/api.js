@@ -27,6 +27,10 @@ export const api = {
   addWaiver: (id, waiver) => request('POST', `/api/books/${id}/waivers`, waiver),
   board: (id) => request('GET', `/api/books/${id}/board`),
   saveDecisions: (id, d) => request('PUT', `/api/books/${id}/decisions`, d),
+  runLlm: (id, tasks) => request('POST', `/api/books/${id}/llm`, { tasks }),
+  llmSettings: () => request('GET', '/api/settings/llm'),
+  saveLlmSettings: (d) => request('PUT', '/api/settings/llm', d),
+  testLlm: () => request('POST', '/api/settings/llm/test'),
   removeWaiver: (id, wid) => request('DELETE', `/api/books/${id}/waivers/${wid}`),
   downloadUrl: (id, which = 'fixed') => `/api/books/${id}/download?which=${which}`,
 }
@@ -36,8 +40,9 @@ export const STATUS = {
   auditing: '体检中',
   ready: '已体检',
   fixing: '修复中',
+  thinking: '大模型分析中',
   fixed: '已修复',
   error: '出错',
 }
 
-export const BUSY = new Set(['queued', 'auditing', 'fixing'])
+export const BUSY = new Set(['queued', 'auditing', 'fixing', 'thinking'])

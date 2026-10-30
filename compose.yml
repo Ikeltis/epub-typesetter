@@ -6,5 +6,8 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:8780:8000"
+    env_file:
+      - path: .env            # 大模型地址与令牌（见 .env.example）；没有这个文件也能运行
+        required: false
     volumes:
       - ./data:/data

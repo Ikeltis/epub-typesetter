@@ -9,6 +9,9 @@
                    fixed.renames.json  修复时的改名链（原路径 → 输出路径），豁免据此匹配输出文件
                    board.json      确认板（排版重建时生成）
                    decisions.json  用户在确认板上的决定（排版重建时读取）
+                   llm.json        大模型对确认板各项的判断（只供采纳，不直接改书）
+    {DATA_DIR}/settings.json       全局设置（大模型地址、令牌、模型；权限 600）
+    {DATA_DIR}/llm-cache/          大模型调用结果缓存（按内容哈希）
 
 不使用用户提供的文件名作路径，id 由服务端生成。
 """
@@ -34,7 +37,7 @@ class Meta:
     filename: str
     size: int
     created: float
-    status: str = 'queued'        # queued / auditing / ready / fixing / fixed / error
+    status: str = 'queued'        # queued / auditing / ready / fixing / thinking / fixed / error
     message: str = ''
     title: str = ''
     author: str = ''

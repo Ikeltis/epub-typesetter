@@ -74,8 +74,10 @@ onUnmounted(() => clearTimeout(timer))
         <template v-if="audit"> · {{ audit.book.documents }} 个正文文件 · {{ kb(meta.size) }}</template>
       </p>
       <p v-if="busy" class="row"><span class="spinner"></span>
-        {{ meta.status === 'fixing' ? '正在修复并重新校验，较大的书需要几十秒…' : '正在体检（含 epubcheck 校验）…' }}</p>
+        {{ meta.status === 'fixing' ? '正在修复并重新校验，较大的书需要几十秒…'
+          : meta.status === 'thinking' ? (meta.message || '大模型分析中…') : '正在体检（含 epubcheck 校验）…' }}</p>
       <p v-if="meta.status === 'error'" class="notice error">{{ meta.message }}</p>
+      <p v-else-if="!busy && meta.message" class="notice">{{ meta.message }}</p>
     </section>
 
     <template v-if="audit">
@@ -137,7 +139,7 @@ onUnmounted(() => clearTimeout(timer))
         </div>
         <div v-if="fix?.rebuild" v-show="tab === 'board'">
           <p v-if="fix.decisions_changed" class="notice">决定已保存，正在或等待重新生成。</p>
-          <ConfirmBoard :pid="id" :busy="busy" :stamp="meta.updated" @rebuild="runFix('rebuild', true)" />
+          <ConfirmBoard :pid="id" :busy="busy" :stamp="meta.updated" @rebuild="runFix('rebuild', true)" @started="load" />
         </div>
         <div v-if="fix?.rebuild" v-show="tab === 'rebuild'">
           <p class="muted small">程序识别出的内容类型，以及被删除的内容（书内目录页由导航取代，广告/引流内容、注释区小标题不再需要）。</p>

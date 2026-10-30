@@ -50,6 +50,18 @@ docker compose -f compose.dev.yml run --rm dev python -m epub_typesetter fix boo
 
 规则的说明、修改提示、规范条目只写在 `guide/07`，改完运行 `python3 scripts/build_rules_meta.py` 重新生成 `src/epub_typesetter/rules_meta.json`。
 
+## 大模型辅助（M3，可选）
+
+用 Claude 原生接口（Anthropic 官方 Python SDK）。大模型只看书的片段、只给判断，结果显示在确认板上，由你点「采纳」后才生效；不配置也能用，只是没有这些建议。
+
+地址和令牌不写进代码，按优先级从三处读：
+
+1. 网页右上角「大模型设置」（保存在 `data/settings.json`，不进仓库）；
+2. 环境变量 `EPUBTS_LLM_*`：复制 `.env.example` 为 `.env` 填写，`docker compose up -d` 会读取（`.env` 不进仓库）；
+3. Anthropic SDK 的标准环境变量 `ANTHROPIC_BASE_URL`、`ANTHROPIC_API_KEY`、`ANTHROPIC_AUTH_TOKEN`。
+
+官方接口填 API key；兼容 Claude 原生协议的中转填中转地址和 Bearer 令牌。分两档模型：轻量（默认 `claude-haiku-5-5`）做大批量判断，重型（默认 `claude-opus-5-5`）做标题层级、注释配对。SDK 暂时固定在 1.x：2.x 默认发送的 API 版本 2026-10-21 有些中转还不接受。
+
 ## 已确定的方向（2026-10-22）
 
 1. 目标阅读器：任意支持 EPUB 3 的阅读系统，不做厂商私有适配。

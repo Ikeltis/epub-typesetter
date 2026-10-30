@@ -316,7 +316,8 @@ def test_board_glossary_lines_and_tfoot():
 def test_decisions_clean_rejects_garbage():
     d = board.clean({'clusters': {'a': 'quote', 'b': 'evil'}, 'kinds': {'poem': 'yes'}, 'items': {'x': False},
                      'extra': 1})
-    assert d == {'version': 1, 'clusters': {'a': 'quote'}, 'kinds': {}, 'items': {'x': False}, 'heads': {}, 'matter': {}}
+    assert d == {'version': 1, 'clusters': {'a': 'quote'}, 'kinds': {}, 'items': {'x': False}, 'heads': {}, 'matter': {},
+                 'alts': {}}
     d = board.clean({'heads': {'k': 'section', 'j': 'h7'}, 'matter': {'k': 'afterword', 'j': 'evil'}})
     assert d['heads'] == {'k': 'section'} and d['matter'] == {'k': 'afterword'}
 
@@ -359,4 +360,14 @@ def test_backlink_direction_does_not_make_body_a_note():
     out, rep, _ = rebuild(body)
     assert rep.rebuild.notes == 1
     _, p = find(out, lambda e: e.tag == X + 'p' and '继续写' in ''.join(e.itertext()))
+    assert p is not None and p.find(f'.//{X}a').get('class') == 'noteref'
+
+
+def test_backlink_target_starting_with_same_digit_is_not_a_note():
+    """回归：正文段落以「7月9日」开头、段中注号是「7」，不能因为字面相同被当成注文开头。"""
+    body = ('<h1>第一章</h1>' + P + '<p>7月9日，正文写到这里<a id="z7" href="c2.xhtml#bz7">7</a>继续。</p>' + P)
+    notes = '<h1>第二章</h1>' + P + '<p><a id="bz7" href="c1.xhtml#z7">[7]</a>《某书》。</p>'
+    out, rep, _ = rebuild(body, notes)
+    assert rep.rebuild.notes == 1
+    _, p = find(out, lambda e: e.tag == X + 'p' and '正文写到这里' in ''.join(e.itertext()))
     assert p is not None and p.find(f'.//{X}a').get('class') == 'noteref'

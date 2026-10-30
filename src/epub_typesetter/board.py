@@ -8,7 +8,7 @@
 
 用户的决定存成 decisions：
   {"version": 1, "clusters": {簇键: 角色}, "kinds": {类别: 是否接受}, "items": {结构或建议的键: 是否接受},
-   "heads": {块键: part/chapter/section/subsection/para}, "matter": {块键: 辅文类型}}
+   "heads": {块键: part/chapter/section/subsection/para}, "matter": {块键: 辅文类型}, "alts": {图片键: 描述}}
 建议的类别在 kinds/items 里以「s-」开头（如 s-poem），与已识别的结构区分。
 """
 from __future__ import annotations
@@ -33,7 +33,8 @@ MAX_ITEMS = 2000
 
 
 def empty() -> dict:
-    return {'version': DECISIONS_VERSION, 'clusters': {}, 'kinds': {}, 'items': {}, 'heads': {}, 'matter': {}}
+    return {'version': DECISIONS_VERSION, 'clusters': {}, 'kinds': {}, 'items': {}, 'heads': {}, 'matter': {},
+            'alts': {}}
 
 
 def load(path: str | Path) -> dict:
@@ -42,7 +43,7 @@ def load(path: str | Path) -> dict:
         return empty()
     d = json.loads(p.read_text(encoding='utf-8'))
     out = empty()
-    for k in ('clusters', 'kinds', 'items', 'heads', 'matter'):
+    for k in ('clusters', 'kinds', 'items', 'heads', 'matter', 'alts'):
         if isinstance(d.get(k), dict):
             out[k] = d[k]
     return out
@@ -64,7 +65,20 @@ def clean(d: dict) -> dict:
     for k, v in (d.get('matter') or {}).items():
         if isinstance(k, str) and v in MATTERS:
             out['matter'][k] = v
+    for k, v in (d.get('alts') or {}).items():
+        if isinstance(k, str) and isinstance(v, str):
+            out['alts'][k] = clean_alt(v)
     return out
+
+
+def clean_alt(v: str) -> str:
+    """图片描述的规范（04 4.11.2.3、4.11.2.4、05 §1.5）：去不可见字符与「图片：」前缀，句末补句号，限长。"""
+    import re
+    v = re.sub(r'[\u00a0\u2060\u200b\s]+', ' ', v).strip()
+    v = re.sub(r'^(图片|插图|图)[：:]\s*', '', v)[:300]
+    if v and not re.search(r'[。！？.!?]$', v):
+        v += '。'
+    return v
 
 
 def _role_of(b, head_kind: dict) -> str:

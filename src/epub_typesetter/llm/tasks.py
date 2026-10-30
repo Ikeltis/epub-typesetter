@@ -16,7 +16,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from ..semantic import CLUSTER_ROLES, MATTERS, REASSIGNABLE, Analysis, block_keys, cluster_key
+from ..semantic import (CLUSTER_ROLES, MATTERS, REASSIGNABLE, Analysis, block_keys, cluster_key, figure_images,
+                        _local)
 from .client import LLM, ContentBlocked, LLMError
 
 SAMPLES = 8
@@ -91,6 +92,26 @@ class HeadChange(BaseModel):
 
 class HeadReview(BaseModel):
     changes: list[HeadChange]
+
+
+SYSTEM_ALT = '''你为中文电子书里的插图写替代文字（alt），供视障读者用读屏软件「听」这张图。
+
+要求（规范 04 4.11.2）：
+- 用一句完整的中文描述画面本身：画了什么、谁、在做什么、图表的主要信息；以句号结尾；一般 15–60 字；
+- 不写「图片」「插图」「这张图」之类的开头，不写图在书里的位置；
+- 不要照抄图注（图注会被单独读出）；可以补充图注没说的画面内容；
+- 图里有文字且是重点（如书影、标语、图表标题）就写出关键文字；
+- 纯装饰（花纹、分隔线、章首装饰图）标 decorative=true，alt 留空。
+置信度 0–1。'''
+
+MAX_IMAGES = 400
+MIN_SIDE = 120
+
+
+class AltDraft(BaseModel):
+    alt: str
+    decorative: bool
+    confidence: float = Field(ge=0, le=1)
 
 
 class ClusterVerdict(BaseModel):
@@ -190,6 +211,54 @@ def struct_jobs(an: Analysis) -> list[tuple[str, str]]:
     return jobs
 
 
+def _image_block(data: bytes) -> dict | None:
+    """缩到长边 1024 像素的 JPEG（省 token）；太小的（装饰、图片字）不发。"""
+    import base64
+    import io
+
+    from PIL import Image
+    try:
+        im = Image.open(io.BytesIO(data))
+        im.load()
+    except Exception:
+        return None
+    if max(im.size) < MIN_SIDE:
+        return None
+    im = im.convert('RGB')
+    im.thumbnail((1024, 1024))
+    buf = io.BytesIO()
+    im.save(buf, 'JPEG', quality=80)
+    return {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/jpeg',
+                                        'data': base64.standard_b64encode(buf.getvalue()).decode()}}
+
+
+def alt_jobs(book, an: Analysis) -> list[tuple[str, list, dict]]:
+    """需要描述的插图：alt 为空或是文件名，且不是图片字。返回 (图片键, 内容块, 附带信息)。"""
+    import re
+    from ..rules.a11y import FILENAME_ALT
+    blocks = an.blocks
+    jobs = []
+    for key, b, img, path in figure_images(book, blocks):
+        alt = (img.get('alt') or '').strip()
+        if alt and not FILENAME_ALT.search(alt) or 'glyph' in (img.get('class') or ''):
+            continue
+        if path not in book.files or not re.search(r'\.(jpe?g|png|gif|webp)$', path, re.I):
+            continue
+        image = _image_block(book.files[path])
+        if image is None:
+            continue
+        cap = next((x.text for x in blocks[b.idx + 1:b.idx + 4] if x.role == 'caption' and x.group == b.idx), '')
+        if _local(b.el.tag) == 'figure':
+            fc = b.el.find('.//{http://www.w3.org/1999/xhtml}figcaption')
+            cap = ''.join(fc.itertext()).strip() if fc is not None else cap
+        prev = next((x.text for x in reversed(blocks[max(0, b.idx - 3):b.idx]) if x.doc == b.doc and x.text), '')
+        text = (f'图注：{_clip(cap, 120) or "（无）"}\n图前的文字：{_clip(prev, 100) or "（无）"}')
+        jobs.append((key, [image, {'type': 'text', 'text': text}], {'path': path, 'caption': cap[:80]}))
+        if len(jobs) >= MAX_IMAGES:
+            break
+    return jobs
+
+
 MAX_HEADS = 600
 
 
@@ -212,7 +281,7 @@ def heads_job(an: Analysis, head_kind: dict) -> tuple[str, list] | None:
     return '\n'.join(lines), heads
 
 
-def run(llm: LLM, an: Analysis, head_kind: dict, tasks: set[str], progress=None) -> dict:
+def run(llm: LLM, an: Analysis, head_kind: dict, tasks: set[str], progress=None, book=None) -> dict:
     """跑选中的任务，返回 llm.json 的内容。progress(done, total) 用于进度显示。"""
     out = {'clusters': {}, 'items': {}, 'errors': []}
     jobs = []
@@ -220,6 +289,12 @@ def run(llm: LLM, an: Analysis, head_kind: dict, tasks: set[str], progress=None)
         jobs += [('clusters', k, SYSTEM_CLUSTERS, t, ClusterVerdict) for k, t in cluster_jobs(an, head_kind)]
     if 'structures' in tasks:
         jobs += [('items', k, SYSTEM_STRUCT, t, StructVerdict) for k, t in struct_jobs(an)]
+    alt_info = {}
+    if 'alts' in tasks and book is not None:
+        for key, content, info in alt_jobs(book, an):
+            alt_info[key] = info
+            jobs.append(('alts', key, SYSTEM_ALT, content, AltDraft))
+        out['alts'] = {}
     done = [0]
 
     def one(job):
@@ -260,6 +335,9 @@ def run(llm: LLM, an: Analysis, head_kind: dict, tasks: set[str], progress=None)
                 continue
             if v is not None:
                 out[bucket][key] = v.model_dump()
+                if bucket == 'alts':
+                    from ..board import clean_alt
+                    out[bucket][key].update(alt_info[key], alt='' if v.decorative else clean_alt(v.alt))
     out['usage'] = llm.usage.to_dict()
     out['models'] = {'light': llm.settings.model_light, 'heavy': llm.settings.model_heavy}
     return out

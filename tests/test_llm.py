@@ -167,3 +167,29 @@ def test_heads_task_uses_heavy_model(tmp_path):
     assert call['model'] == 'claude-opus-5-5' and call['output_config'] == {'effort': 'medium'}
     assert '1. [chapter] 序' in call['messages'][0]['content']
     assert list(out['heads'].values()) == [{'kind': 'chapter', 'matter': 'preface', 'confidence': .9, 'reason': '序言'}]
+
+
+def test_alt_drafts_and_adoption(tmp_path):
+    from PIL import Image
+    import io
+    buf = io.BytesIO()
+    Image.new('RGB', (400, 300), (10, 120, 200)).save(buf, 'JPEG')
+    c1 = ('<h1>第一章</h1><p>正文叙述。</p><div class="pic"><img src="../Images/p1.jpg"/><p>图1　海边</p></div>'
+          '<p>正文。</p><p><img src="../Images/cover.jpg"/></p><p>正文。</p>')
+    src = make_epub({'OEBPS/Text/c1.xhtml': XHTML11.format(title='一', body=c1), 'OEBPS/Images/p1.jpg': buf.getvalue()})
+    book = Book.load(src)
+    rep = optimize(book)
+    llm = fake_llm(tmp_path, lambda kw: {'alt': '图片：海边的一座灯塔', 'decorative': False, 'confidence': .8})
+    out = tasks.run(llm, rep.analysis, rep.rebuild.head_kind, {'alts'}, book=book)
+    assert len(out['alts']) == 1                                     # 60×80 的小图不发
+    (key, draft), = out['alts'].items()
+    assert draft['alt'] == '海边的一座灯塔。' and draft['caption'] == '图1　海边'
+    sent = llm.client.messages.calls[0]['messages'][0]['content']
+    assert sent[0]['type'] == 'image' and sent[0]['source']['media_type'] == 'image/jpeg'
+    from epub_typesetter import board
+    b2 = Book.load(src)
+    optimize(b2, decisions=board.clean({'alts': {key: '海边的灯塔'}}))
+    out_book = Book.load(b2.to_bytes())
+    alts = [i.get('alt') for p in out_book.content_docs() for i in out_book.tree(p).getroot().iter(
+        '{http://www.w3.org/1999/xhtml}img') if 'p1' in i.get('src', '')]
+    assert alts == ['海边的灯塔。']

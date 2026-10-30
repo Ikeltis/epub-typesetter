@@ -93,6 +93,7 @@ class Analysis:
     junk_docs: set[str]
     vertical: bool = False                              # 整本竖排（重建时要保留）
     units: dict[int, dict] = field(default_factory=dict)   # 成组结构：编号 → {kind, level(A/B), …}
+    alt_text: dict[str, str] = field(default_factory=dict)  # 用户采纳的图片描述：图片键 → alt
     suggestions: list[dict] = field(default_factory=list)  # 只给建议、不自动改的识别结果（C 级，04 各节「识别信号」）
 
     def counts(self) -> Counter:
@@ -294,6 +295,23 @@ def _toc_targets(book: Book) -> dict[tuple[str, str], str]:
     return out
 
 
+def _text_before(root, target) -> str:
+    """root 里位于 target 之前的全部文字（按文档顺序；不按字面查找，避免「7」误认成「7月9日」的开头）。"""
+    parts = []
+
+    def walk(el) -> bool:
+        if el is target:
+            return True
+        parts.append(el.text or '')
+        for c in el:
+            if isinstance(c.tag, str) and walk(c):
+                return True
+            parts.append(c.tail or '')
+        return False
+    walk(root)
+    return ''.join(parts)
+
+
 def _link_only(el) -> bool:
     """块里的文字全部在内部链接中（目录页的典型特征）。"""
     total = _norm(''.join(el.itertext()))
@@ -324,6 +342,23 @@ def block_keys(blocks: list[Block]) -> dict[int, str]:
         base = f'{b.doc}:{hashlib.sha1(b.text.encode()).hexdigest()[:10]}'
         seen[base] += 1
         out[b.idx] = base if seen[base] == 1 else f'{base}#{seen[base]}'
+    return out
+
+
+def figure_images(book: Book, blocks: list[Block]) -> list[tuple[str, Block, object, str]]:
+    """块级插图里的每张图：(稳定键, 所在块, img 元素, 包内路径)。大模型写描述与重建写 alt 用同一套键。"""
+    seen: Counter = Counter()
+    out = []
+    for b in blocks:
+        if b.role != 'figure':
+            continue
+        for img in b.el.iter():
+            if not isinstance(img.tag, str) or _local(img.tag) != 'img' or not img.get('src'):
+                continue
+            path = Book.resolve(b.doc, img.get('src').strip())
+            base = f'{b.doc}:{path}'
+            seen[base] += 1
+            out.append((base if seen[base] == 1 else f'{base}#{seen[base]}', b, img, path))
     return out
 
 
@@ -474,8 +509,7 @@ def analyze(book: Book, decisions: dict | None = None) -> Analysis:
         for x in target.el.iter(X + 'a'):
             href = x.get('href') or ''
             if href.partition('#')[2] == ref_id and not is_external(href) and Book.resolve(target.doc, href) == doc:
-                full = ''.join(target.el.itertext())
-                lead = full[:full.find(''.join(x.itertext()))] if ''.join(x.itertext()) in full else full
+                lead = _text_before(target.el, x)
                 return bool(re.fullmatch(r'(\[\d{1,3}\]|［\d{1,3}］|\d{1,3}[.．]?|[①-⑳]|\s)*', lead))
         return False
     for b in blocks:
@@ -596,6 +630,7 @@ def analyze(book: Book, decisions: dict | None = None) -> Analysis:
     apply_cluster_roles(blocks, decisions.get('clusters') or {})
     apply_block_roles(blocks, decisions.get('heads') or {}, decisions.get('matter') or {})
     an = Analysis(blocks, toc, noterefs, junk_docs, is_vertical(book))
+    an.alt_text = {k: v for k, v in (decisions.get('alts') or {}).items() if isinstance(v, str)}
     # 9) 成组结构：诗歌、书信、列表、条文、插图目录、表题表注、术语表（structures.py），再按用户取舍
     from .structures import detect
     detect(book, an, decisions)

@@ -9,14 +9,14 @@ const emit = defineEmits(['rebuild', 'started'])
 const data = ref(null)
 const error = ref('')
 const saving = ref(false)
-const d = ref({ clusters: {}, kinds: {}, items: {}, heads: {}, matter: {} })   // 正在编辑的决定
+const d = ref({ clusters: {}, kinds: {}, items: {}, heads: {}, matter: {}, alts: {} })   // 正在编辑的决定
 const open = ref({})                                     // 展开的结构类别
 const showSmall = ref(false)
 
 async function load() {
   try {
     data.value = await api.board(props.pid)
-    d.value = { heads: {}, matter: {}, ...JSON.parse(JSON.stringify(data.value.decisions)) }
+    d.value = { heads: {}, matter: {}, alts: {}, ...JSON.parse(JSON.stringify(data.value.decisions)) }
     error.value = ''
   } catch (e) { data.value = null; error.value = e.message }
 }
@@ -56,7 +56,20 @@ function toggleSugg(s, on) {
 
 const dirty = computed(() => data.value && JSON.stringify(d.value) !== JSON.stringify(data.value.decisions))
 const changed = computed(() => Object.keys(d.value.clusters).length + Object.keys(d.value.kinds).length
-  + Object.keys(d.value.items).length + Object.keys(d.value.heads).length + Object.keys(d.value.matter).length)
+  + Object.keys(d.value.items).length + Object.keys(d.value.heads).length + Object.keys(d.value.matter).length
+  + Object.keys(d.value.alts).length)
+
+// ---- 图片描述草稿 ----
+const altShown = ref(60)
+const altDraft = ref({})                    // 正在编辑但未采纳的文字
+const altText = (a) => altDraft.value[a.key] ?? d.value.alts[a.key] ?? a.alt
+const altAdopted = (a) => a.key in d.value.alts
+function adoptAlt(a, on = true) {
+  if (on) d.value.alts[a.key] = altText(a)
+  else delete d.value.alts[a.key]
+}
+const assetUrl = (path) => `/api/books/${props.pid}/asset?path=${encodeURIComponent(path)}`
+const altPending = computed(() => (data.value?.alts || []).filter((a) => !a.decorative && !altAdopted(a)))
 
 // ---- 标题层级与辅文 ----
 const HEAD_KINDS = [['part', '部'], ['chapter', '章'], ['section', '节'], ['subsection', '小节'], ['para', '不是标题']]
@@ -81,10 +94,10 @@ async function save() {
     emit('rebuild')
   } catch (e) { error.value = e.message } finally { saving.value = false }
 }
-function reset() { d.value = { clusters: {}, kinds: {}, items: {}, heads: {}, matter: {} } }
+function reset() { d.value = { clusters: {}, kinds: {}, items: {}, heads: {}, matter: {}, alts: {} } }
 
 // ---- 大模型 ----
-const llmTasks = ref({ clusters: true, structures: true, heads: true })
+const llmTasks = ref({ clusters: true, structures: true, heads: true, alts: false })
 const roleLabel = (r) => data.value?.roles.find((x) => x.value === r)?.label || r
 const pct = (c) => `${Math.round(c * 100)}%`
 async function runLlm() {
@@ -105,7 +118,7 @@ const pending = computed(() => {
   if (!data.value?.llm) return 0
   let n = data.value.clusters.filter(clusterDiffers).length
   for (const k of data.value.structures) n += k.items.filter((it) => itemDiffers(k, it)).length
-  n += (data.value.heads || []).filter(headDiffers).length
+  n += (data.value.heads || []).filter(headDiffers).length + altPending.value.length
   return n + actionable.value.filter(suggDiffers).length
 })
 function adoptAll(min = 0.8) {
@@ -113,6 +126,7 @@ function adoptAll(min = 0.8) {
   for (const k of data.value.structures) for (const it of k.items) if (itemDiffers(k, it) && it.llm.confidence >= min) adoptItem(k, it)
   for (const s of actionable.value) if (suggDiffers(s) && s.llm.confidence >= min) adoptSugg(s)
   for (const h of data.value.heads || []) if (headDiffers(h) && h.llm.confidence >= min) adoptHead(h)
+  for (const a of altPending.value) if (a.confidence >= min) adoptAlt(a)
 }
 </script>
 
@@ -134,6 +148,7 @@ function adoptAll(min = 0.8) {
         <label class="small"><input v-model="llmTasks.clusters" type="checkbox" /> 段落样式</label>
         <label class="small"><input v-model="llmTasks.structures" type="checkbox" /> 结构与建议</label>
         <label class="small" title="用重型模型，一次看全书标题"><input v-model="llmTasks.heads" type="checkbox" /> 标题层级与辅文</label>
+        <label class="small" title="把插图（缩到 1024 像素）发给轻量模型，最多 400 张"><input v-model="llmTasks.alts" type="checkbox" /> 图片描述</label>
         <span class="spacer"></span>
         <button :disabled="busy || !Object.values(llmTasks).some(Boolean)" @click="runLlm">{{ data.llm ? '重新分析' : '开始分析' }}</button>
         <a href="#/settings" class="small">设置</a>
@@ -202,6 +217,24 @@ function adoptAll(min = 0.8) {
         </td>
       </tr>
     </tbody></table>
+
+    <template v-if="data.alts?.length">
+      <h3>图片描述（大模型草稿，{{ data.alts.length }} 张）</h3>
+      <p class="muted small">给读屏用的替代文字（alt）。可以先改文字再采纳；采纳的在重新生成时写进书里。标为装饰的图保持 alt 为空。</p>
+      <div class="alts">
+        <div v-for="a in data.alts.slice(0, altShown)" :key="a.key" class="alt" :class="{ adopted: altAdopted(a) }">
+          <img :src="assetUrl(a.path)" loading="lazy" alt="" />
+          <div class="small muted">{{ a.caption || '（无图注）' }}</div>
+          <template v-if="a.decorative"><div class="small muted">大模型认为是装饰图，alt 留空</div></template>
+          <template v-else>
+            <textarea rows="3" :value="altText(a)" @input="altDraft[a.key] = $event.target.value; if (altAdopted(a)) d.alts[a.key] = $event.target.value"></textarea>
+            <label class="small"><input type="checkbox" :checked="altAdopted(a)" @change="adoptAlt(a, $event.target.checked)" />
+              采纳 <span class="muted">{{ pct(a.confidence) }}</span></label>
+          </template>
+        </div>
+      </div>
+      <p v-if="data.alts.length > altShown"><a href="#" @click.prevent="altShown += 60">再显示 60 张</a></p>
+    </template>
 
     <h3>识别出的结构</h3>
     <p v-if="!data.structures.length" class="muted small">这本书没有识别出诗歌、书信、列表等结构。</p>
@@ -276,5 +309,10 @@ tr.off td.llm-cell { opacity: 1; }
 .ok-text { color: var(--ok); }
 .warn-text { color: var(--warning); }
 button.link { border: none; background: none; padding: 0 4px; color: var(--accent); cursor: pointer; font-size: 13px; }
+.alts { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.alt { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px; display: flex; flex-direction: column; gap: 4px; }
+.alt.adopted { border-color: var(--accent); background: var(--accent-weak); }
+.alt img { width: 100%; height: 140px; object-fit: contain; background: var(--bg); }
+.alt textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 13px; }
 .badge { margin-left: 6px; }
 </style>

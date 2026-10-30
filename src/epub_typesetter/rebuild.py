@@ -29,7 +29,8 @@ from lxml import etree
 from .book import NS, Book
 from .nav import NCX, Entry, build_nav, ncx_path
 from .rules.content import Z3998_URI
-from .semantic import BULLET_RE, NOTE_LABEL_RE, Analysis, Block, _local, _size_level, _style_of, class_styles
+from .semantic import (BULLET_RE, NOTE_LABEL_RE, Analysis, Block, _local, _size_level, _style_of, class_styles,
+                       figure_images)
 from .structures import ARTICLE, CN_ITEM, OL_NUM
 from .tables import rebuild_table
 from .upgrade import book_language, content_properties
@@ -205,6 +206,9 @@ class Rebuilder:
         self.block_path: dict[int, str] = {}              # 块序号 → 新文档
         self.target_ids: dict[int, str] = {}              # 被目录引用的图、表块序号 → 输出 id（figure-N / table-N）
         self.list_entries: dict[int, tuple[str, str] | None] = {}   # 目录条目块 → (链接, 文字)
+        # 用户在确认板上采纳的图片描述（04 4.11.2.6）：原 img 元素 → alt
+        self.alt_for = {id(img): an.alt_text[k] for k, _, img, _ in figure_images(book, an.blocks)
+                        if k in an.alt_text} if an.alt_text else {}
 
     # ---------- 1. 分章 ----------
 
@@ -672,6 +676,8 @@ class Rebuilder:
                         e = copy.deepcopy(img)
                         e.tail = None
                         _clean_media(e)
+                        if id(img) in self.alt_for:
+                            e.set('alt', self.alt_for[id(img)])
                         if _local(img.tag) == 'img':
                             e.attrib.pop('width', None)
                             e.attrib.pop('height', None)
@@ -713,6 +719,10 @@ class Rebuilder:
                 e.tail = None
                 if b.idx in self.target_ids and not e.get('id'):
                     e.set('id', self.target_ids[b.idx])
+                if self.alt_for:                      # 原有 <figure> 整体复制：按对应位置写入采纳的描述
+                    for o, c in zip(b.el.iter(), e.iter()):
+                        if id(o) in self.alt_for:
+                            c.set('alt', self.alt_for[id(o)])
                 for d in e.iter():
                     if isinstance(d.tag, str):
                         if _local(d.tag) in ('img', 'image'):

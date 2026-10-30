@@ -161,9 +161,29 @@ def get_board(pid: str):
         sg['llm'] = (llm.get('items') or {}).get(sg.get('key'))
     for h in data.get('heads', []):
         h['llm'] = (llm.get('heads') or {}).get(h['key'])
+    data['alts'] = [{'key': k, **v} for k, v in (llm.get('alts') or {}).items()]
     data['llm'] = {'usage': llm.get('usage'), 'errors': llm.get('errors', []), 'models': llm.get('models'),
                    'base_url': llm.get('base_url')} if llm else None
     return {**data, 'decisions': board.load(store.path(pid, 'decisions.json'))}
+
+
+@app.get('/api/books/{pid}/asset')
+def get_asset(pid: str, path: str):
+    """书里的一张图片（确认板上的缩略图）。只读包内已有的图片文件。"""
+    import mimetypes
+    import zipfile
+    from fastapi.responses import Response
+    _meta_or_404(pid)
+    if not path.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg')):
+        raise HTTPException(400, '只能取图片')
+    for name in ('fixed.epub', 'original.epub'):
+        f = store.path(pid, name)
+        if os.path.exists(f):
+            with zipfile.ZipFile(f) as z:
+                if path in z.namelist():
+                    return Response(z.read(path), media_type=mimetypes.guess_type(path)[0] or 'application/octet-stream',
+                                    headers={'Cache-Control': 'private, max-age=3600'})
+    raise HTTPException(404, '找不到这张图')
 
 
 @app.post('/api/books/{pid}/llm', status_code=202)

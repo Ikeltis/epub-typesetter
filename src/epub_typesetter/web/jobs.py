@@ -185,7 +185,7 @@ def is_epub_like(data: bytes) -> bool:
 
 
 
-LLM_TASKS = {'clusters', 'structures', 'heads'}
+LLM_TASKS = {'clusters', 'structures', 'heads', 'alts'}
 
 
 def llm(pid: str, wanted: list[str], prev: str = 'fixed') -> None:
@@ -203,7 +203,8 @@ def llm(pid: str, wanted: list[str], prev: str = 'fixed') -> None:
         def progress(done, total):
             if done % 3 == 0 or done == total:
                 store.update(pid, message=f'大模型分析：{done}/{total}')
-        res = llm_tasks.run(client, orep.analysis, orep.rebuild.head_kind, set(wanted) & LLM_TASKS, progress)
+        # 传同一个 book：规范修复可能改过图片文件名，图片键按修复后的路径算（重建不动图片）
+        res = llm_tasks.run(client, orep.analysis, orep.rebuild.head_kind, set(wanted) & LLM_TASKS, progress, book)
         res['base_url'] = client.settings.effective_base_url
         store.write_json(pid, 'llm.json', res)
         store.update(pid, status=prev, message='')

@@ -233,27 +233,32 @@ def _image_block(data: bytes) -> dict | None:
 
 
 def alt_jobs(book, an: Analysis) -> list[tuple[str, list, dict]]:
-    """需要描述的插图：alt 为空或是文件名，且不是图片字。返回 (图片键, 内容块, 附带信息)。"""
+    """需要描述的插图：alt 为空、是文件名，或与图注一字不差（04 4.11.2.5、4.11.2.7、4.11.2.8），且不是图片字。
+    返回 (图片键, 内容块, 附带信息)。"""
     import re
     from ..rules.a11y import FILENAME_ALT
     blocks = an.blocks
     jobs = []
+    same = lambda a, c: re.sub(r'\s', '', a) == re.sub(r'\s', '', c)
     for key, b, img, path in figure_images(book, blocks):
-        alt = (img.get('alt') or '').strip()
-        if alt and not FILENAME_ALT.search(alt) or 'glyph' in (img.get('class') or ''):
-            continue
-        if path not in book.files or not re.search(r'\.(jpe?g|png|gif|webp)$', path, re.I):
-            continue
-        image = _image_block(book.files[path])
-        if image is None:
+        if 'glyph' in (img.get('class') or ''):
             continue
         cap = next((x.text for x in blocks[b.idx + 1:b.idx + 4] if x.role == 'caption' and x.group == b.idx), '')
         if _local(b.el.tag) == 'figure':
             fc = b.el.find('.//{http://www.w3.org/1999/xhtml}figcaption')
             cap = ''.join(fc.itertext()).strip() if fc is not None else cap
+        alt = (img.get('alt') or '').strip()
+        if alt and not FILENAME_ALT.search(alt) and not (cap and same(alt, cap)):
+            continue                                   # 已有像样的描述
+        if path not in book.files or not re.search(r'\.(jpe?g|png|gif|webp)$', path, re.I):
+            continue
+        image = _image_block(book.files[path])
+        if image is None:
+            continue
         prev = next((x.text for x in reversed(blocks[max(0, b.idx - 3):b.idx]) if x.doc == b.doc and x.text), '')
         text = (f'图注：{_clip(cap, 120) or "（无）"}\n图前的文字：{_clip(prev, 100) or "（无）"}')
-        jobs.append((key, [image, {'type': 'text', 'text': text}], {'path': path, 'caption': cap[:80]}))
+        jobs.append((key, [image, {'type': 'text', 'text': text}],
+                     {'path': path, 'caption': cap[:80], 'old_alt': alt[:80]}))
         if len(jobs) >= MAX_IMAGES:
             break
     return jobs

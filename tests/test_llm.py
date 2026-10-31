@@ -193,3 +193,19 @@ def test_alt_drafts_and_adoption(tmp_path):
     alts = [i.get('alt') for p in out_book.content_docs() for i in out_book.tree(p).getroot().iter(
         '{http://www.w3.org/1999/xhtml}img') if 'p1' in i.get('src', '')]
     assert alts == ['海边的灯塔。']
+
+
+def test_alt_equal_to_caption_gets_a_draft(tmp_path):
+    from PIL import Image
+    import io
+    buf = io.BytesIO()
+    Image.new('RGB', (400, 300), (10, 120, 200)).save(buf, 'JPEG')
+    c1 = ('<h1>第一章</h1><p>正文。</p><figure><img src="../Images/p1.jpg" alt="图1—1 股价走势"/>'
+          '<figcaption>图1—1 股价走势</figcaption></figure><p>正文。</p>'
+          '<figure><img src="../Images/p2.jpg" alt="一条上升的折线。"/><figcaption>图1—2 另一张</figcaption></figure>')
+    src = make_epub({'OEBPS/Text/c1.xhtml': XHTML11.format(title='一', body=c1), 'OEBPS/Images/p1.jpg': buf.getvalue(),
+                     'OEBPS/Images/p2.jpg': buf.getvalue()})
+    book = Book.load(src)
+    rep = optimize(book)
+    jobs = tasks.alt_jobs(book, rep.analysis)
+    assert [j[2]['old_alt'] for j in jobs] == ['图1—1 股价走势']        # 已有像样描述的那张不重写

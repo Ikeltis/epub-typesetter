@@ -371,3 +371,14 @@ def test_backlink_target_starting_with_same_digit_is_not_a_note():
     assert rep.rebuild.notes == 1
     _, p = find(out, lambda e: e.tag == X + 'p' and '正文写到这里' in ''.join(e.itertext()))
     assert p is not None and p.find(f'.//{X}a').get('class') == 'noteref'
+
+
+def test_original_cover_page_not_duplicated():
+    """原书自带的封面页（SVG 包着封面图）删去，只留重建生成的标准封面页。"""
+    cov = ('<div><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 60 80">'
+           '<image width="60" height="80" xlink:href="../Images/cover.jpg"/></svg></div>')
+    out, rep, _ = rebuild(cov + '<h1>第一章</h1>' + P)
+    covers = [p for p, r in docs(out).items() for e in r.iter() if isinstance(e.tag, str)
+              and 'cover.jpg' in (e.get('src') or e.get('{http://www.w3.org/1999/xlink}href') or '')]
+    assert len(covers) == 1 and covers[0].endswith('cover.xhtml')
+    assert any(r == 'cover' for r, _ in rep.rebuild.removed)

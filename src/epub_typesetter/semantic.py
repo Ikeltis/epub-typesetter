@@ -12,7 +12,7 @@
   toc        书内目录页（由 nav 取代） junk      广告/引流内容
   meta       版权页的「键：值」行      quote     引文
   right      右对齐短行（落款）        center    居中短行
-  keep       表格、pre 等原样保留的块
+  keep       表格、pre 等原样保留的块  cover     原书封面页（重建时由标准封面页取代）
   note-cont  多段注的续段               heading-merged 已并入相邻标题的块（章号、章名各成标题时）
   poem / letter / dl / ol    成组结构（同组 unit 相同，part 是组内角色），见 structures.py
   item / article             中文序号项、法规条文（04 §4.10）
@@ -595,6 +595,29 @@ def analyze(book: Book, decisions: dict | None = None) -> Analysis:
         if j < len(blocks) and blocks[j].role in ('para', 'quote') and SOURCE_RE.match(blocks[j].text) and \
                 len(blocks[j].text) <= 120:
             blocks[j].role, blocks[j].group, blocks[j].reason = 'source', b.idx, '图后的资料来源'
+
+    # 6b) 原书的封面页：重建会按 04 §4.14 另生成标准封面页，原来只放封面图的页面（或全书开头那张封面图）删去，
+    #     否则会出现两个封面
+    cover = next((i.path for i in book.manifest() if 'cover-image' in i.properties), None)
+    if cover:
+        def images(b):
+            out = []
+            for d in b.el.iter():
+                if isinstance(d.tag, str) and _local(d.tag) in ('img', 'image'):
+                    src = d.get('src') or d.get('{http://www.w3.org/1999/xlink}href') or d.get('href') or ''
+                    out.append(Book.resolve(b.doc, src.strip()) if src else '')
+            return out
+        is_cover = lambda b: b.role == 'figure' and images(b) and all(x == cover for x in images(b))
+        docs_blocks: dict[str, list] = {}
+        for b in blocks:
+            docs_blocks.setdefault(b.doc, []).append(b)
+        for doc, bs in docs_blocks.items():
+            if all(is_cover(b) for b in bs):
+                for b in bs:
+                    b.role, b.reason = 'cover', '原书封面页（重建时另生成标准封面页）'
+        first = next((b for b in blocks if b.role != 'cover'), None)
+        if first is not None and is_cover(first) and first.idx < 3:
+            first.role, first.reason = 'cover', '全书开头的封面图（重建时另生成标准封面页）'
 
     # 7) 广告文件：整份文件多数块是引流内容
     junk_docs = set()

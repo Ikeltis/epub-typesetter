@@ -406,3 +406,42 @@ class AltText(Rule):
                 book.mark_dirty(i.file)
                 log.append(f'{i.file}：清理 alt {n} 处')
         return log
+
+
+# ---------- 封面 ----------
+
+@register
+class DuplicateCover(Rule):
+    """RES-019（部分）：全书只有一个封面页。只放封面图的页面不止一个，或封面图又在正文里当插图出现，读者会看到两个封面。
+    只报告；排版重建会删去原封面页、另生成标准封面页。"""
+    id, title, order = 'RES-019', '封面页写法', 95
+
+    def check(self, book):
+        from ..book import NS as _NS
+        cover = next((i.path for i in book.manifest() if 'cover-image' in i.properties), None)
+        if cover is None:
+            return []
+        pages, extra = [], []
+        for it in book.spine_items():
+            if it.path not in book.files or it.media_type != 'application/xhtml+xml' or 'nav' in it.properties:
+                continue
+            root = book.tree(it.path).getroot()
+            b = body(root)
+            imgs = [e for e in b.iter() if isinstance(e.tag, str) and e.tag.rsplit('}', 1)[-1] in ('img', 'image')]
+            srcs = [book.resolve(it.path, (e.get('src') or e.get('{%s}href' % _NS['xlink']) or '').strip()) for e in imgs]
+            hits = [e for e, s in zip(imgs, srcs) if s == cover]
+            if not hits:
+                continue
+            if not ''.join(b.itertext()).strip() and all(s == cover for s in srcs):
+                pages.append((it.path, hits[0]))
+            else:
+                extra.extend((it.path, h) for h in hits)
+        n = len(pages) + len(extra)
+        if n <= 1:
+            return []
+        out = []
+        for path, el in pages[1:] + extra if pages else extra[1:]:
+            out.append(self.issue(WARNING, f'封面图在全书出现 {n} 次（只放封面图的页面 {len(pages)} 个），读者会看到重复的封面',
+                                  path, SUGGEST, hits=[self.hit(el)],
+                                  hint='全书只留一个封面页：删去重复的封面页或正文里的封面图；「排版重建」会自动处理。'))
+        return out

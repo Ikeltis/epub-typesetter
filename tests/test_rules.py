@@ -240,3 +240,16 @@ def test_z3998_prefix_added_on_html_and_moved_from_body():
     pre = root.get('{http://www.idpf.org/2007/ops}prefix')
     assert 'z3998: http://www.daisy.org/z3998/2012/vocab/structure/' in pre and 'foo: http://example.com/' in pre
     assert root.find('{http://www.w3.org/1999/xhtml}body').get('{http://www.idpf.org/2007/ops}prefix') is None
+
+
+def test_duplicate_cover_reported():
+    cov = ('<div><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 60 80">'
+           '<image width="60" height="80" xlink:href="../Images/cover.jpg"/></svg></div>')
+    b = Book.load(make_epub({'OEBPS/Text/c1.xhtml': XHTML11.format(title='封面', body=cov),
+                             'OEBPS/Text/c2.xhtml': XHTML11.format(title='二', body='<h1>二</h1><p><img src="../Images/cover.jpg"/></p>')}))
+    engine.fix(b)
+    issues = [i for i in engine.audit(b) if i.rule_id == 'RES-019']
+    assert len(issues) == 1 and issues[0].file == 'OEBPS/Text/c2.xhtml' and '2 次' in issues[0].message
+    single = Book.load(make_epub())
+    engine.fix(single)
+    assert not [i for i in engine.audit(single) if i.rule_id == 'RES-019']

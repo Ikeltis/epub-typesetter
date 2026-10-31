@@ -41,7 +41,7 @@ XML_LANG = '{http://www.w3.org/XML/1998/namespace}lang'
 KEEP_INLINE = {'a', 'b', 'strong', 'i', 'em', 'sup', 'sub', 'u', 's', 'del', 'ins', 'abbr', 'cite', 'q', 'code',
                'kbd', 'samp', 'ruby', 'rt', 'rp', 'rb', 'small', 'time', 'var', 'dfn', 'mark', 'bdi', 'bdo', 'wbr',
                'br', 'img', 'span'}
-REMOVED_ROLES = {'toc', 'note-head', 'junk'}
+REMOVED_ROLES = {'toc', 'note-head', 'junk', 'cover'}
 TYPE_BY_TITLE = [
     (re.compile(r'^版权'), 'copyright-page', None),
     (re.compile(r'^(编辑手记|前言|序|序言|自序|推荐序|代序|引言|导言|导读|致读者|写在前面)'), 'preface', 'doc-preface'),

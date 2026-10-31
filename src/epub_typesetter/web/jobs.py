@@ -120,7 +120,7 @@ ROLE_NAMES = {'h1': '一级标题', 'h2': '二级标题', 'h3': '三级标题', 
               'center': '居中短行', 'keep': '表格等原样保留', 'poem': '诗歌', 'letter': '书信', 'ol': '有序列表项',
               'dl': '定义列表', 'item': '序号项', 'article': '条文', 'loi-head': '插图/表格目录标题',
               'loi-entry': '插图/表格目录条目', 'table-caption': '表题', 'table-note': '表注', 'note-cont': '注释续段',
-              'heading-merged': '已并入标题', 'h4': '四级标题', 'h5': '五级标题', 'h6': '六级标题'}
+              'heading-merged': '已并入标题', 'cover': '原封面页', 'h4': '四级标题', 'h5': '五级标题', 'h6': '六级标题'}
 SUGGEST_NAMES = {'poem': '诗歌', 'letter': '书信', 'loi': '插图目录', 'lot': '表格目录', 'table': '表格',
                  'glossary': '术语表', 'script': '剧本对白'}
 

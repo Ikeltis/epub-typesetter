@@ -488,7 +488,7 @@ blockquote p{ margin:.35em 0; line-height:1.5; text-indent:2em;
   font-family:"Kaiti SC","STKaiti","KaiTi",serif; }           /* [书] 楷体；行高≥1.4 */
 
 /* ===== 4. 列表 ===== */
-ul, ol{ margin:.5em 0; padding-left:2em; }
+ul, ol{ margin:.5em 0; padding-left:3.2em; }      /* 序号与正文首行同缩两字，回行悬挂对齐序号后的文字（04 4.10.3.11） */
 li{ margin:.2em 0; }
 li p{ margin:.2em 0; text-indent:0; }
 

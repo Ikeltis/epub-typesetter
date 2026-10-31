@@ -628,6 +628,7 @@ def analyze(book: Book, decisions: dict | None = None) -> Analysis:
             junk_docs.add(doc)
     for b in blocks:
         if b.doc in junk_docs:
+            b.attrs['pre_junk'] = b.role          # 用户在确认板上选「保留」时还原
             b.role, b.reason = 'junk', '引流/广告页'
 
     # 8) 其他：列表项、版权页、对齐短行、引文

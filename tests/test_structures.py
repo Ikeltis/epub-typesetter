@@ -382,3 +382,39 @@ def test_original_cover_page_not_duplicated():
               and 'cover.jpg' in (e.get('src') or e.get('{http://www.w3.org/1999/xlink}href') or '')]
     assert len(covers) == 1 and covers[0].endswith('cover.xhtml')
     assert any(r == 'cover' for r, _ in rep.rebuild.removed)
+
+
+# ---------- 广告：整页可保留、零散行只建议 ----------
+
+AD = '<h1>第二章</h1>' + P + '<p>读累了记得休息一会哦~</p><p>公众号：某某书屋</p><p>电子书搜索下载</p><p>书单分享</p>'
+
+
+def test_ad_page_deleted_by_default_and_keepable():
+    files = {'OEBPS/Text/c2.xhtml': XHTML11.format(title='广告', body='<p>读累了记得休息一会哦~</p><p>公众号：某某书屋</p>'
+                                                                  '<p>电子书搜索下载</p><p>书单分享</p>')}
+    out, rep, _ = rebuild('<h1>第一章</h1>' + P, files['OEBPS/Text/c2.xhtml'][files['OEBPS/Text/c2.xhtml'].index('<p>'):
+                                                                             files['OEBPS/Text/c2.xhtml'].index('</body>')])
+    assert ('junk', '公众号：某某书屋') in rep.rebuild.removed
+
+    def keep(bd):
+        k = next(k for k in bd['structures'] if k['kind'] == 'junk')
+        assert k['label'] == '广告页（删除）'
+        return {'items': {k['items'][0]['key']: False}}
+    out, rep, bd = rebuild_with('<h1>第一章</h1>' + P, keep, '<p>读累了记得休息一会哦~</p><p>公众号：某某书屋</p>'
+                                                         '<p>电子书搜索下载</p><p>书单分享</p>')
+    assert find(out, lambda e: e.text == '公众号：某某书屋')[1] is not None
+    assert not any(r == 'junk' for r, _ in rep.rebuild.removed)
+
+
+def test_stray_ad_line_only_suggested():
+    c1 = '<h1>第一章</h1>' + P * 6 + '<p>更多好书请关注公众号某某书屋</p>' + P * 6 + '<p>他说：“扫码关注吧。”</p>' + P * 6
+    out, rep, _ = rebuild(c1)
+    ads = [s for s in rep.analysis.suggestions if s['kind'] == 'ad']
+    assert len(ads) == 1 and '更多好书' in ads[0]['text']                      # 带引号的对话不算
+    assert find(out, lambda e: e.text == '更多好书请关注公众号某某书屋')[1] is not None   # 默认不删
+
+    def accept(bd):
+        return {'items': {next(s['key'] for s in bd['suggestions'] if s['kind'] == 's-ad'): True}}
+    out, rep, _ = rebuild_with(c1, accept)
+    assert find(out, lambda e: e.text == '更多好书请关注公众号某某书屋')[1] is None
+    assert ('junk', '更多好书请关注公众号某某书屋') in rep.rebuild.removed

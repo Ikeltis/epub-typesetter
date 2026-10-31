@@ -12,6 +12,8 @@
   表题、表注       紧贴表格的「表X…」「注：」段。
   术语表           原书 dl 在术语表标题下 → dl.glossary；「词：释义」成行文本只建议。
   剧本对白         只建议（C，04 §4.9 识别信号）。
+  广告             整页广告（semantic 第 7 步判定）列为结构，默认删除、可逐页保留；
+                   夹在正文里的零散广告行只建议（C）。
 
 置信度只有 A、B 自动改写；C 写进 Analysis.suggestions，由报告展示、用户确认。
 
@@ -575,6 +577,9 @@ def apply_decisions(ctx: _Ctx, decisions: dict) -> None:
         if sg['kind'] == 'poem' and blocks:
             title = ctx.blocks[sg['title']] if sg.get('title') is not None else None
             make_poem(ctx, blocks, title, None, 'C')
+        elif sg['kind'] == 'ad' and blocks:
+            for b in blocks:
+                b.role, b.reason = 'junk', '用户确认：夹在正文里的广告'
         elif sg['kind'] == 'table':
             ctx.blocks[sg['blocks'][0]].attrs['tfoot'] = True
         elif sg['kind'] == 'glossary' and blocks:
@@ -596,6 +601,48 @@ def apply_decisions(ctx: _Ctx, decisions: dict) -> None:
                     b.role, b.unit = 'stage', u
 
 
+# ---------- 广告 ----------
+
+# 夹在正文里的广告行：比整页判定更严，必须是短行且含明确的引流用语；只给建议，勾选才删
+AD_LINE = re.compile(r'公众号|微信号|微信搜索|扫码|扫一扫|关注(我们|本号)|更多(好书|电子书|精彩|资源)|'
+                     r'电子书(搜索|下载|打包)|免费(下载|电子书)|书友群|交流群|QQ群|加群|'
+                     r'本书由.{0,12}(整理|制作|分享|提供)|下载站|读累了')
+
+
+def detect_junk_pages(ctx: _Ctx) -> None:
+    """整页广告：每页一个结构（kind=junk），默认删除；用户拒绝时还原成原来的角色。"""
+    pages: dict[str, list] = {}
+    for b in ctx.blocks:
+        if b.role == 'junk' and 'pre_junk' in b.attrs:
+            pages.setdefault(b.doc, []).append(b)
+    for doc, bs in pages.items():
+        u = ctx.unit('junk', bs[0], level='B')
+        for b in bs:
+            b.unit, b.part = u, 'junk'
+            ctx.orig[b.idx] = b.attrs['pre_junk']
+
+
+def detect_ad_lines(ctx: _Ctx) -> None:
+    """版权页上出版社自己印的微博、公众号是出版信息，不算广告，跳过。"""
+    from .semantic import COPYRIGHT_TITLES
+    n = 0
+    section = ''
+    for b in ctx.blocks:
+        if b.role == 'heading':
+            section = _clean(b.text)
+            continue
+        if section.startswith(COPYRIGHT_TITLES) or b.role == 'meta':
+            continue
+        if b.role not in ('para', 'center', 'right') or b.unit >= 0 or len(b.text) > 60:
+            continue
+        if not AD_LINE.search(b.text) or re.search('[“”「」]', b.text):     # 带引号的多半是对话、引文
+            continue
+        ctx.suggest('ad', b, f'疑似夹在正文里的广告：{b.text[:40]}', [b])
+        n += 1
+        if n >= 50:
+            break
+
+
 def detect(book: Book, an, decisions: dict | None = None) -> None:
     ctx = _Ctx(book, an)
     detect_dl(ctx)
@@ -606,4 +653,6 @@ def detect(book: Book, an, decisions: dict | None = None) -> None:
     detect_tables(ctx)
     detect_glossary(ctx)
     detect_script(ctx)
+    detect_junk_pages(ctx)
+    detect_ad_lines(ctx)
     apply_decisions(ctx, decisions or {})

@@ -27,7 +27,8 @@ ROLE_LABELS = {'para': '正文', 'quote': '引文', 'center': '居中短行', 'r
 KIND_LABELS = {'poem': '诗歌', 'letter': '书信', 'ol': '有序列表', 'dl': '定义列表', 'item': '序号项',
                'article': '条文', 'loi': '插图目录', 'lot': '表格目录',
                's-poem': '疑似诗歌', 's-script': '剧本对白', 's-glossary': '术语表成行文本', 's-table': '表格合计行',
-               's-loi': '插图目录', 'gloss': '术语表条目', 'script': '剧本'}
+               's-loi': '插图目录', 'gloss': '术语表条目', 'script': '剧本',
+               'junk': '广告页（删除）', 's-ad': '零散广告行'}
 MAX_SAMPLES = 3
 MAX_ITEMS = 2000
 

@@ -131,9 +131,9 @@ def fix(pid: str, mode: str = 'basic') -> None:
     original = open(store.path(pid, 'original.epub'), 'rb').read()
     book = Book.load(original)
     ws = load_waivers(pid)
+    decisions = board.load(store.path(pid, 'decisions.json'))
     result = {'mode': mode}
     if mode == 'rebuild':
-        decisions = board.load(store.path(pid, 'decisions.json'))
         orep = optimize(book, waivers=ws, decisions=decisions)
         store.write_json(pid, 'board.json', board.build(orep.analysis, orep.rebuild.head_kind, decisions))
         rep = engine.FixReport(orep.fix.changes + orep.refix.changes, orep.fix.before, orep.refix.after,
@@ -176,8 +176,48 @@ def fix(pid: str, mode: str = 'basic') -> None:
         'epubcheck': _epubcheck_report(msgs),
         'size': len(out),
     })
+    stats = decision_stats(pid, decisions) if mode == 'rebuild' else {'total': 0, 'llm': 0}
+    result['version'] = store.add_version(pid, out, {
+        'mode': mode, 'decisions': stats['total'], 'llm': stats['llm'],
+        'epubcheck': result['epubcheck'].get('blocking') if result['epubcheck'].get('available') else None,
+        'text_ok': result['text']['equal'], 'text': result['text']['summary'],
+        'issues': result['after']['total'], 'files': result.get('rebuild', {}).get('files'),
+        'notes': result.get('rebuild', {}).get('notes')})
     store.write_json(pid, 'fix.json', result)
     store.update(pid, status='fixed')
+
+
+def decision_stats(pid: str, decisions: dict) -> dict:
+    """用户决定的条数，其中有多少与大模型的意见一致（视为采纳了大模型建议）。"""
+    llm = store.read_json(pid, 'llm.json') or {}
+    n = sum(len(decisions.get(k) or {}) for k in ('clusters', 'kinds', 'items', 'heads', 'matter', 'alts'))
+    m = 0
+    for k, v in (decisions.get('clusters') or {}).items():
+        m += (llm.get('clusters') or {}).get(k, {}).get('role') == v
+    for k, v in (decisions.get('items') or {}).items():
+        m += (llm.get('items') or {}).get(k, {}).get('accept') == v
+    for k, v in (decisions.get('heads') or {}).items():
+        m += (llm.get('heads') or {}).get(k, {}).get('kind') == v
+    for k, v in (decisions.get('matter') or {}).items():
+        m += (llm.get('heads') or {}).get(k, {}).get('matter') == v
+    m += sum(1 for k in (decisions.get('alts') or {}) if k in (llm.get('alts') or {}))
+    return {'total': n, 'llm': m}
+
+
+def summary(pid: str) -> dict:
+    """详情页「③ 确认」那一栏的概况。"""
+    b = store.read_json(pid, 'board.json')
+    llm = store.read_json(pid, 'llm.json')
+    d = board.load(store.path(pid, 'decisions.json'))
+    out = {'board': None, 'llm': None, 'decisions': decision_stats(pid, d)}
+    if b:
+        out['board'] = {'clusters': len(b.get('clusters', [])), 'heads': len(b.get('heads', [])),
+                        'structures': sum(k['total'] for k in b.get('structures', [])),
+                        'suggestions': sum(1 for s in b.get('suggestions', []) if s.get('actionable'))}
+    if llm:
+        out['llm'] = {'opinions': sum(len(llm.get(k) or {}) for k in ('clusters', 'items', 'heads', 'alts')),
+                      'cost': (llm.get('usage') or {}).get('cost'), 'errors': llm.get('errors', [])}
+    return out
 
 
 def is_epub_like(data: bytes) -> bool:

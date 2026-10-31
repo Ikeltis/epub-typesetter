@@ -111,3 +111,24 @@ def test_board_endpoints(client):
     d = wait(client, pid, done=('fixed', 'error'))
     assert d['meta']['status'] == 'fixed' and not d['fix'].get('decisions_changed')
     assert client.get(f'/api/books/{pid}/board').json()['decisions']['clusters'] == {key: 'quote'}
+
+
+def test_versions_kept_and_downloadable(client):
+    pid = client.post('/api/books', files={'file': ('测试书.epub', make_epub(), 'application/epub+zip')}).json()['id']
+    wait(client, pid)
+    for mode in ('basic', 'rebuild'):
+        client.post(f'/api/books/{pid}/fix?mode={mode}')
+        wait(client, pid, done=('fixed', 'error'))
+    d = client.get(f'/api/books/{pid}').json()
+    vs = d['versions']
+    assert [v['n'] for v in vs] == [2, 1] and [v['mode'] for v in vs] == ['rebuild', 'basic']
+    assert vs[0]['decisions'] == 0 and vs[0]['text_ok'] and d['fix']['version'] == 2
+    assert d['summary']['board']['clusters'] >= 1 and d['summary']['decisions'] == {'total': 0, 'llm': 0}
+    r = client.get(f'/api/books/{pid}/download?which=v1')
+    assert r.status_code == 200 and '%C2%B7v1' in r.headers['content-disposition']
+    assert client.get(f'/api/books/{pid}/download?which=v9').status_code == 404
+    assert client.get(f'/api/books/{pid}/download?which=../x').status_code == 400
+    for _ in range(5):                                            # 只留最近 5 个版本
+        client.post(f'/api/books/{pid}/fix?mode=basic')
+        wait(client, pid, done=('fixed', 'error'))
+    assert [v['n'] for v in client.get(f'/api/books/{pid}').json()['versions']] == [7, 6, 5, 4, 3]

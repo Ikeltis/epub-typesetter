@@ -75,7 +75,7 @@ def get_book(pid: str):
     if audit and 'summary' not in audit['issues'] and meta.status not in jobs.BUSY:
         jobs.rescore(pid)                  # 旧版报告格式：按 guide/07 §6 重算一次
     return {'meta': asdict(meta), 'audit': store.read_json(pid, 'audit.json'),
-            'fix': store.read_json(pid, 'fix.json')}
+            'fix': store.read_json(pid, 'fix.json'), 'versions': store.versions(pid), 'summary': jobs.summary(pid)}
 
 
 @app.post('/api/books/{pid}/fix', status_code=202)
@@ -238,14 +238,19 @@ def put_decisions(pid: str, body: dict):
 
 @app.get('/api/books/{pid}/download')
 def download(pid: str, which: str = 'fixed'):
+    """which：original 原件、fixed 最近一次生成、vN 第 N 版。"""
+    import re as _re
     meta = _meta_or_404(pid)
-    if which not in ('fixed', 'original'):
-        raise HTTPException(400, 'which 只能是 fixed 或 original')
-    p = store.path(pid, f'{which}.epub')
+    if which in ('fixed', 'original'):
+        p = store.path(pid, f'{which}.epub')
+    elif _re.fullmatch(r'v\d{1,6}', which):
+        p = os.path.join(store.path(pid, 'versions'), f'{which}.epub')
+    else:
+        raise HTTPException(400, 'which 只能是 original、fixed 或 vN')
     if not os.path.exists(p):
-        raise HTTPException(404, '还没有修复结果')
+        raise HTTPException(404, '没有这份文件（旧版本只保留最近 5 份）')
     stem = meta.filename[:-5] if meta.filename.lower().endswith('.epub') else meta.filename
-    name = f'{stem}.epub' if which == 'original' else f'{stem}（优化）.epub'
+    name = f'{stem}.epub' if which == 'original' else f'{stem}（优化{"" if which == "fixed" else "·" + which}）.epub'
     return FileResponse(p, media_type='application/epub+zip',
                         headers={'Content-Disposition': f"attachment; filename*=UTF-8''{quote(name)}"})
 

@@ -2,7 +2,6 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { api, BUSY } from '../api.js'
 import StatusBadge from '../components/StatusBadge.vue'
-import StatTile from '../components/StatTile.vue'
 import IssueReport from '../components/IssueReport.vue'
 import EpubcheckList from '../components/EpubcheckList.vue'
 import ChangeLog from '../components/ChangeLog.vue'
@@ -22,6 +21,35 @@ const audit = computed(() => data.value?.audit)
 const fix = computed(() => data.value?.fix)
 const busy = computed(() => meta.value && BUSY.has(meta.value.status))
 const autoCount = computed(() => audit.value?.issues.summary?.auto_fixable ?? 0)
+const versions = computed(() => data.value?.versions || [])
+const sum = computed(() => data.value?.summary)
+const mode = ref('rebuild')
+const open = ref({})
+const viewOriginal = ref(false)
+const details = ref(null)
+const shownIssues = computed(() => (fix.value && !viewOriginal.value ? fix.value.after : audit.value.issues))
+// 已保存的决定还没进最新版本：最新版本不是重建，或它用的决定数与现在不同，或保存后还没重新生成
+const pendingDecisions = computed(() => {
+  const v = versions.value[0]
+  if (!sum.value?.board || !sum.value.decisions.total && !fix.value?.decisions_changed) return false
+  return !!fix.value?.decisions_changed || !v || v.mode !== 'rebuild' || v.decisions !== sum.value.decisions.total
+})
+function versionLabel(v) {
+  if (v.mode !== 'rebuild') return '仅规范修复'
+  if (!v.decisions) return '排版重建（程序默认）'
+  return `排版重建 + ${v.decisions} 处确认` + (v.llm ? `（含大模型意见 ${v.llm} 处）` : '')
+}
+const when = (t) => new Date(t * 1000).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+function openTab(t) {
+  tab.value = t
+  viewOriginal.value = false
+  details.value?.scrollIntoView({ behavior: 'smooth' })
+}
+function showOriginal() {
+  viewOriginal.value = true
+  tab.value = 'issues'
+  details.value?.scrollIntoView({ behavior: 'smooth' })
+}
 
 async function load() {
   try {
@@ -36,6 +64,7 @@ async function runFix(mode, keepTab = false) {
   try {
     await api.fix(props.id, mode)
     if (!keepTab) tab.value = mode === 'rebuild' ? 'board' : 'changes'
+    viewOriginal.value = false
     await load()
   } catch (e) { error.value = e.message }
 }
@@ -81,64 +110,115 @@ onUnmounted(() => clearTimeout(timer))
     </section>
 
     <template v-if="audit">
-      <section class="card">
-        <div class="row">
-          <h2 style="margin:0">体检结果</h2>
-          <span class="spacer"></span>
-          <button :disabled="busy" @click="runFix('basic')"
-                  title="只修规范错误与伪排版，不改变版面">仅规范修复</button>
-          <button class="primary" :disabled="busy" @click="runFix('rebuild')"
-                  title="识别标题、插图、注释等并重建为规范的 EPUB 3，套用统一排版主题">排版重建（推荐）</button>
+      <section class="card steps">
+        <!-- ① 体检 -->
+        <div class="step done">
+          <div class="num">1</div>
+          <div class="body">
+            <div class="row"><strong>体检</strong><span class="muted small">原书的问题</span></div>
+            <div class="small">
+              epubcheck <b :class="{ bad: audit.epubcheck.blocking }">{{ audit.epubcheck.available ? audit.epubcheck.blocking : '—' }}</b> 个错误 ·
+              本工具发现 <b>{{ audit.issues.total }}</b> 处问题（错误 {{ sevCount(audit.issues, 'error') }}、警告 {{ sevCount(audit.issues, 'warning') }}），其中 {{ autoCount }} 处可自动修
+              <a href="#" @click.prevent="showOriginal()">查看</a>
+            </div>
+          </div>
         </div>
-        <div class="row tiles">
-          <StatTile label="epubcheck 错误" :value="audit.epubcheck.available ? audit.epubcheck.blocking : '—'"
-                    :tone="audit.epubcheck.blocking ? 'error' : 'ok'" sub="规范硬错误（含致命）" />
-          <StatTile label="本工具发现的问题" :value="audit.issues.total"
-                    :sub="`错误 ${sevCount(audit.issues, 'error')} · 警告 ${sevCount(audit.issues, 'warning')}`" />
-          <StatTile label="可自动修复" :value="autoCount" sub="确定性修复，不改动正文文字" />
+
+        <!-- ② 生成 -->
+        <div class="step" :class="{ done: versions.length }">
+          <div class="num">2</div>
+          <div class="body">
+            <div class="row"><strong>生成</strong><span class="muted small">选一种方式，生成新的 EPUB；每次生成都会留一个版本</span></div>
+            <div class="row choices">
+              <label><span><input v-model="mode" type="radio" value="rebuild" /> <b>排版重建</b>（推荐）</span>
+                <span class="muted small">识别标题、插图、注释、诗歌等，按规范重排，套用统一主题</span></label>
+              <label><span><input v-model="mode" type="radio" value="basic" /> <b>仅规范修复</b></span>
+                <span class="muted small">只修规范错误和伪排版，版面不动</span></label>
+              <button class="primary" :disabled="busy" @click="runFix(mode)">生成</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ③ 确认 -->
+        <div class="step" :class="{ done: sum?.board && !pendingDecisions, off: !sum?.board }">
+          <div class="num">3</div>
+          <div class="body">
+            <div class="row"><strong>确认</strong><span class="muted small">检查程序的判断，可让大模型给意见；改动要「重新生成」才进书里</span></div>
+            <div v-if="!sum?.board" class="small muted">做一次「排版重建」后，这里会列出程序的判断供你确认。</div>
+            <template v-else>
+              <div class="small">
+                段落样式 {{ sum.board.clusters }} 组 · 识别出的结构 {{ sum.board.structures }} 处 · 标题 {{ sum.board.heads }} 个 · 待定建议 {{ sum.board.suggestions }} 条
+              </div>
+              <div class="small">
+                大模型：<template v-if="sum.llm">已分析，{{ sum.llm.opinions }} 条意见<template v-if="sum.llm.cost != null">（约 ${{ sum.llm.cost.toFixed(3) }}）</template></template>
+                <template v-else>还没分析</template>
+                · 你的决定 {{ sum.decisions.total }} 处<template v-if="sum.decisions.llm">（其中采纳大模型意见 {{ sum.decisions.llm }} 处）</template>
+              </div>
+              <div class="row">
+                <button @click="openTab('board')">打开确认板</button>
+                <template v-if="pendingDecisions">
+                  <span class="notice small">有决定还没生成进书里</span>
+                  <button class="primary" :disabled="busy" @click="runFix('rebuild')">按确认结果重新生成</button>
+                </template>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <!-- ④ 下载 -->
+        <div class="step" :class="{ done: versions.length, off: !versions.length }">
+          <div class="num">4</div>
+          <div class="body">
+            <div class="row"><strong>下载</strong><span class="muted small">保留最近 5 个版本</span></div>
+            <table class="versions"><tbody>
+              <template v-for="(v, i) in versions" :key="v.n">
+                <tr :class="{ latest: i === 0 }">
+                  <td class="mono">版本 {{ v.n }}</td>
+                  <td>{{ versionLabel(v) }}<span v-if="i === 0" class="badge ok">最新</span></td>
+                  <td class="small muted">{{ when(v.created) }}</td>
+                  <td class="small"><span :class="v.epubcheck ? 'bad' : 'good'">epubcheck {{ v.epubcheck ?? '—' }} 错</span>
+                    · <span :class="v.text_ok ? 'good' : 'bad'">{{ v.text_ok ? '文字完整' : '文字有差异' }}</span></td>
+                  <td class="act"><a href="#" class="small" @click.prevent="open[v.n] = !open[v.n]">详情</a>
+                    <a class="btn" :class="{ primary: i === 0 }" :href="api.downloadUrl(id, 'v' + v.n)">下载</a></td>
+                </tr>
+                <tr v-if="open[v.n]" class="detail"><td></td><td colspan="4" class="small muted">
+                  {{ v.mode === 'rebuild' ? `重建为 ${v.files} 个文件，注释 ${v.notes} 条；` : '' }}剩余问题 {{ v.issues }} 处；{{ v.text }}；{{ kb(v.size) }}
+                  <template v-if="v.mode === 'rebuild'">；用了 {{ v.decisions }} 处确认板上的决定<template v-if="v.llm">，其中 {{ v.llm }} 处与大模型意见一致</template></template>
+                </td></tr>
+              </template>
+              <tr>
+                <td class="mono">原件</td><td class="muted">上传的原书，未改动</td><td></td><td></td>
+                <td class="act"><a class="btn" :href="api.downloadUrl(id, 'original')">下载</a></td>
+              </tr>
+            </tbody></table>
+          </div>
         </div>
       </section>
 
-      <section v-if="fix && !busy" class="card">
-        <div class="row">
-          <h2 style="margin:0">{{ fix.mode === 'rebuild' ? '排版重建结果' : '规范修复结果' }}</h2>
-          <span class="spacer"></span>
-          <a class="btn" :href="api.downloadUrl(id, 'original')">下载原件</a>
-          <a class="btn primary" :href="api.downloadUrl(id, 'fixed')">下载优化后的 EPUB</a>
+      <section class="card" ref="details">
+        <div class="row" style="margin-bottom:8px">
+          <h2 style="margin:0; font-size:17px">详细信息</h2>
+          <span class="muted small">{{ fix && !viewOriginal ? `最新版本（版本 ${versions[0]?.n ?? ''}）` : '原书' }}</span>
+          <a v-if="fix" href="#" class="small" @click.prevent="viewOriginal = !viewOriginal">{{ viewOriginal ? '看最新版本' : '看原书' }}</a>
         </div>
-        <div class="row tiles">
-          <StatTile label="epubcheck 错误" :value="`${audit.epubcheck.blocking ?? '—'} → ${fix.epubcheck.blocking ?? '—'}`"
-                    :tone="fix.epubcheck.blocking ? 'error' : 'ok'" />
-          <StatTile label="本工具发现的问题" :value="`${fix.before.total} → ${fix.after.total}`"
-                    :sub="fix.after.total ? '剩余的需确认、大模型或人工处理' : ''" />
-          <StatTile label="正文文字" :value="fix.text.equal ? '完整' : '有差异'" :tone="fix.text.equal ? 'ok' : 'error'"
-                    :sub="fix.text.summary" />
-          <StatTile v-if="fix.rebuild" label="重建" :value="`${fix.rebuild.files} 个文件`"
-                    :sub="`注释 ${fix.rebuild.notes} 条 · 删除 ${fix.rebuild.removed_total} 块${fix.rebuild.vertical ? ' · 竖排' : ''}`" />
-          <StatTile v-else label="修改" :value="fix.changes.length" :sub="`输出 ${kb(fix.size)}`" />
-        </div>
-      </section>
-
-      <section class="card">
         <div class="tabs row">
           <button :class="{ active: tab === 'issues' }" @click="tab = 'issues'">
-            问题清单（{{ fix ? fix.after.total : audit.issues.total }}）</button>
+            问题清单（{{ shownIssues.total }}）</button>
           <button :class="{ active: tab === 'epubcheck' }" @click="tab = 'epubcheck'">epubcheck</button>
           <button v-if="fix?.rebuild" :class="{ active: tab === 'board' }" @click="tab = 'board'">确认板</button>
           <button v-if="fix?.rebuild" :class="{ active: tab === 'rebuild' }" @click="tab = 'rebuild'">重建详情</button>
           <button v-if="fix" :class="{ active: tab === 'changes' }" @click="tab = 'changes'">修改记录（{{ fix.changes.length }}）</button>
         </div>
         <div v-show="tab === 'issues'">
-          <p class="muted small">{{ fix ? '修复后仍存在的问题' : '修复前的问题' }}，按文件分组。有意保留的写法可以「忽略」（须写理由），之后修复会跳过它。</p>
+          <p class="muted small">{{ fix && !viewOriginal ? '最新版本里仍存在的问题' : '原书的问题' }}，按文件分组。有意保留的写法可以「忽略」（须写理由），之后生成会跳过它。</p>
           <p v-if="fix?.waivers_changed" class="notice">豁免已更改。下载的文件仍是按旧豁免修复的，重新点「仅规范修复」或「排版重建」后才生效。</p>
-          <IssueReport :report="fix ? fix.after : audit.issues" :pid="id" :busy="busy" @changed="load" />
+          <IssueReport :report="shownIssues" :pid="id" :busy="busy" @changed="load" />
         </div>
         <div v-show="tab === 'epubcheck'">
-          <p class="muted small">{{ fix ? '修复后' : '修复前' }}的 EPUBCheck 官方校验结果。</p>
-          <EpubcheckList :report="fix ? fix.epubcheck : audit.epubcheck" />
+          <p class="muted small">{{ fix && !viewOriginal ? '最新版本' : '原书' }}的 EPUBCheck 官方校验结果。</p>
+          <EpubcheckList :report="fix && !viewOriginal ? fix.epubcheck : audit.epubcheck" />
         </div>
         <div v-if="fix?.rebuild" v-show="tab === 'board'">
-          <p v-if="fix.decisions_changed" class="notice">决定已保存，正在或等待重新生成。</p>
           <ConfirmBoard :pid="id" :busy="busy" :stamp="meta.updated" @rebuild="runFix('rebuild', true)" @started="load" />
         </div>
         <div v-if="fix?.rebuild" v-show="tab === 'rebuild'">
@@ -188,6 +268,23 @@ onUnmounted(() => clearTimeout(timer))
 <style scoped>
 .title { font-size: 22px; margin: 0; }
 .tiles { margin-top: 14px; align-items: stretch; }
+.steps { display: flex; flex-direction: column; gap: 4px; }
+.step { display: flex; gap: 14px; padding: 12px 0; border-top: 1px solid var(--border); }
+.step:first-child { border-top: none; padding-top: 0; }
+.step .num { flex: none; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
+  font-weight: 700; background: var(--info-weak); color: var(--muted); }
+.step.done .num { background: var(--ok-weak); color: var(--ok); }
+.step.off { opacity: .55; }
+.step .body { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+.choices { gap: 18px; align-items: center; }
+.choices label { display: flex; flex-direction: column; gap: 2px; }
+.versions td { padding: 6px 8px; vertical-align: middle; }
+.versions tr.latest td { font-weight: 500; }
+.versions tr.detail td { border-bottom: none; padding-top: 0; }
+.versions .act { text-align: right; white-space: nowrap; display: flex; gap: 10px; align-items: center; justify-content: flex-end; }
+.bad { color: var(--error); }
+.good { color: var(--ok); }
+.badge { margin-left: 6px; }
 .tabs { gap: 4px; border-bottom: 1px solid var(--border); margin: -4px 0 12px; padding-bottom: 8px; }
 .tabs button { border-color: transparent; }
 .tabs button.active { border-color: var(--border); background: var(--bg); font-weight: 600; }

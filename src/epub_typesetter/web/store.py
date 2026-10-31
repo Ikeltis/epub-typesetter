@@ -2,7 +2,8 @@
 
     {DATA_DIR}/{id}/meta.json      状态与基本信息
                    original.epub   上传原件（永不修改）
-                   fixed.epub      修复结果
+                   fixed.epub      最近一次生成的结果
+                   versions/vN.epub、vN.json   每次生成各留一份（最近 5 份）与摘要
                    audit.json      体检报告
                    fix.json        修复报告
                    waivers.json    按书豁免（guide/07 §7 格式）
@@ -117,3 +118,39 @@ def read_json(pid: str, name: str):
 
 def delete(pid: str) -> None:
     shutil.rmtree(path(pid), ignore_errors=True)
+
+
+MAX_VERSIONS = 5
+
+
+def versions(pid: str) -> list[dict]:
+    """生成过的版本（新的在前）。"""
+    d = path(pid, 'versions')
+    if not os.path.isdir(d):
+        return []
+    out = []
+    for name in os.listdir(d):
+        if re.fullmatch(r'v\d+\.json', name):
+            with open(os.path.join(d, name), encoding='utf-8') as f:
+                out.append(json.load(f))
+    return sorted(out, key=lambda v: -v['n'])
+
+
+def add_version(pid: str, data: bytes, summary: dict) -> int:
+    """存一份新版本，返回版本号；超过 MAX_VERSIONS 时删最旧的。"""
+    d = path(pid, 'versions')
+    os.makedirs(d, exist_ok=True)
+    old = versions(pid)
+    n = (old[0]['n'] + 1) if old else 1
+    with open(os.path.join(d, f'v{n}.epub'), 'wb') as f:
+        f.write(data)
+    summary = {**summary, 'n': n, 'created': time.time(), 'size': len(data)}
+    with open(os.path.join(d, f'v{n}.json'), 'w', encoding='utf-8') as f:
+        json.dump(summary, f, ensure_ascii=False)
+    for v in old[MAX_VERSIONS - 1:]:
+        for ext in ('epub', 'json'):
+            try:
+                os.remove(os.path.join(d, f'v{v["n"]}.{ext}'))
+            except FileNotFoundError:
+                pass
+    return n

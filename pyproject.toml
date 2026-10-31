@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "epub-typesetter"
 version = "0.0.1"
-description = "把已有的中文 EPUB 优化为结构规范、排版精良的 EPUB 3"
+description = "缮本：把已有的中文 EPUB 优化为结构规范、排版精良的 EPUB 3"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"

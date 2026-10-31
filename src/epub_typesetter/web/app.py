@@ -23,7 +23,7 @@ MAX_UPLOAD = int(os.environ.get('EPUBTS_MAX_UPLOAD_MB', '300')) * 1024 * 1024
 CATEGORIES = {'STR': '结构', 'SEM': '语义', 'STY': '样式', 'TYP': '排版', 'TXT': '文本', 'RES': '资源',
               'A11Y': '无障碍'}
 
-app = FastAPI(title='epub-typesetter', version=__version__)
+app = FastAPI(title='缮本 epub-typesetter', version=__version__)
 
 
 def _meta_or_404(pid: str) -> store.Meta:

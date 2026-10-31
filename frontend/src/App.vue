@@ -16,8 +16,8 @@ const bookTab = computed(() => route.value[2] || '')
 
 <template>
   <header class="topbar">
-    <a href="#/" class="brand">EPUB 排版优化</a>
-    <span class="tagline">把已有的 EPUB 修成规范、好读的 EPUB 3</span>
+    <a href="#/" class="brand" title="缮本：修书，修出一个好本子">缮本</a>
+    <span class="tagline">EPUB 排版优化 · 把已有的 EPUB 修成规范、好读的 EPUB 3</span>
     <span style="flex:1"></span>
     <a href="#/settings" class="small">大模型设置</a>
   </header>

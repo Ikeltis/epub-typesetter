@@ -132,3 +132,22 @@ def test_versions_kept_and_downloadable(client):
         client.post(f'/api/books/{pid}/fix?mode=basic')
         wait(client, pid, done=('fixed', 'error'))
     assert [v['n'] for v in client.get(f'/api/books/{pid}').json()['versions']] == [7, 6, 5, 4, 3]
+
+
+def test_preview_spine_and_files(client):
+    pid = client.post('/api/books', files={'file': ('测试书.epub', make_epub(), 'application/epub+zip')}).json()['id']
+    wait(client, pid)
+    sp = client.get(f'/api/books/{pid}/spine/original').json()
+    assert [s['path'] for s in sp] == ['OEBPS/Text/c1.xhtml', 'OEBPS/Text/c2.xhtml'] and sp[0]['title'] == '第一章'
+    r = client.get(f'/api/books/{pid}/view/original/OEBPS/Text/c1.xhtml')
+    assert r.status_code == 200 and r.headers['content-type'].startswith('application/xhtml+xml')
+    assert "script-src 'none'" in r.headers['content-security-policy']
+    assert client.get(f'/api/books/{pid}/view/original/OEBPS/Images/cover.jpg').headers['content-type'] == 'image/jpeg'
+    assert client.get(f'/api/books/{pid}/view/original/OEBPS/nope.xhtml').status_code == 404
+    assert client.get(f'/api/books/{pid}/view/original/..%2F..%2Fmeta.json').status_code == 404
+    assert client.get(f'/api/books/{pid}/view/v1/OEBPS/Text/c1.xhtml').status_code == 404      # 还没生成
+    assert client.get(f'/api/books/{pid}/spine/evil').status_code == 404
+    client.post(f'/api/books/{pid}/fix?mode=rebuild')
+    wait(client, pid, done=('fixed', 'error'))
+    sp = client.get(f'/api/books/{pid}/spine/v1').json()
+    assert sp[0]['title'] == '封面' and client.get(f'/api/books/{pid}/view/v1/{sp[1]["path"]}').status_code == 200

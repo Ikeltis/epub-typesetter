@@ -26,6 +26,7 @@ export const api = {
   remove: (id) => request('DELETE', `/api/books/${id}`),
   addWaiver: (id, waiver) => request('POST', `/api/books/${id}/waivers`, waiver),
   board: (id) => request('GET', `/api/books/${id}/board`),
+  spine: (id, which) => request('GET', `/api/books/${id}/spine/${which}`),
   saveDecisions: (id, d) => request('PUT', `/api/books/${id}/decisions`, d),
   runLlm: (id, tasks) => request('POST', `/api/books/${id}/llm`, { tasks }),
   llmSettings: () => request('GET', '/api/settings/llm'),

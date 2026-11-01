@@ -17,7 +17,7 @@ from .. import __version__, board, engine, epubcheck
 from ..llm.client import LLM, LLMError
 from ..llm.settings import LLMSettings
 from ..waivers import WaiverFileError, WaiverSet
-from . import jobs, store
+from . import jobs, preview, store
 
 MAX_UPLOAD = int(os.environ.get('EPUBTS_MAX_UPLOAD_MB', '300')) * 1024 * 1024
 CATEGORIES = {'STR': '结构', 'SEM': '语义', 'STY': '样式', 'TYP': '排版', 'TXT': '文本', 'RES': '资源',
@@ -234,6 +234,30 @@ def put_decisions(pid: str, body: dict):
         f['decisions_changed'] = True
         store.write_json(pid, 'fix.json', f)
     return d
+
+
+@app.get('/api/books/{pid}/spine/{which}')
+def get_spine(pid: str, which: str):
+    """预览用的章节列表（spine 顺序）。which：original、fixed、vN。"""
+    _meta_or_404(pid)
+    items = preview.spine(pid, which)
+    if items is None:
+        raise HTTPException(404, '没有这个版本')
+    return items
+
+
+@app.get('/api/books/{pid}/view/{which}/{inner:path}')
+def view_file(pid: str, which: str, inner: str):
+    """预览：按包内路径返回文件，章节里的相对链接（样式、图片、其他章节）都能照常解析。书里的脚本不执行。"""
+    from fastapi.responses import Response
+    _meta_or_404(pid)
+    got = preview.read(pid, which, inner)
+    if got is None:
+        raise HTTPException(404, '包里没有这个文件')
+    data, mime = got
+    return Response(data, media_type=mime, headers={'Content-Security-Policy': preview.CSP,
+                                                    'X-Content-Type-Options': 'nosniff',
+                                                    'Cache-Control': 'private, max-age=600'})
 
 
 @app.get('/api/books/{pid}/download')

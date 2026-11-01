@@ -6,6 +6,7 @@ import IssueReport from '../components/IssueReport.vue'
 import EpubcheckList from '../components/EpubcheckList.vue'
 import ChangeLog from '../components/ChangeLog.vue'
 import ConfirmBoard from '../components/ConfirmBoard.vue'
+import PreviewPanel from '../components/PreviewPanel.vue'
 
 const props = defineProps({ id: String, initialTab: { type: String, default: '' } })
 const data = ref(null)
@@ -40,6 +41,11 @@ function versionLabel(v) {
   return `排版重建 + ${v.decisions} 处确认` + (v.llm ? `（含大模型意见 ${v.llm} 处）` : '')
 }
 const when = (t) => new Date(t * 1000).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+const previewWant = ref('')
+function preview(which) {
+  previewWant.value = which
+  openTab('preview')
+}
 function openTab(t) {
   tab.value = t
   viewOriginal.value = false
@@ -179,6 +185,7 @@ onUnmounted(() => clearTimeout(timer))
                   <td class="small"><span :class="v.epubcheck ? 'bad' : 'good'">epubcheck {{ v.epubcheck ?? '—' }} 错</span>
                     · <span :class="v.text_ok ? 'good' : 'bad'">{{ v.text_ok ? '文字完整' : '文字有差异' }}</span></td>
                   <td class="act"><a href="#" class="small" @click.prevent="open[v.n] = !open[v.n]">详情</a>
+                    <a href="#" class="small" @click.prevent="preview('v' + v.n)">预览</a>
                     <a class="btn" :class="{ primary: i === 0 }" :href="api.downloadUrl(id, 'v' + v.n)">下载</a></td>
                 </tr>
                 <tr v-if="open[v.n]" class="detail"><td></td><td colspan="4" class="small muted">
@@ -188,7 +195,8 @@ onUnmounted(() => clearTimeout(timer))
               </template>
               <tr>
                 <td class="mono">原件</td><td class="muted">上传的原书，未改动</td><td></td><td></td>
-                <td class="act"><a class="btn" :href="api.downloadUrl(id, 'original')">下载</a></td>
+                <td class="act"><a href="#" class="small" @click.prevent="preview('original')">预览</a>
+                  <a class="btn" :href="api.downloadUrl(id, 'original')">下载</a></td>
               </tr>
             </tbody></table>
           </div>
@@ -205,6 +213,7 @@ onUnmounted(() => clearTimeout(timer))
           <button :class="{ active: tab === 'issues' }" @click="tab = 'issues'">
             问题清单（{{ shownIssues.total }}）</button>
           <button :class="{ active: tab === 'epubcheck' }" @click="tab = 'epubcheck'">epubcheck</button>
+          <button v-if="versions.length" :class="{ active: tab === 'preview' }" @click="tab = 'preview'">预览</button>
           <button v-if="fix?.rebuild" :class="{ active: tab === 'board' }" @click="tab = 'board'">确认板</button>
           <button v-if="fix?.rebuild" :class="{ active: tab === 'rebuild' }" @click="tab = 'rebuild'">重建详情</button>
           <button v-if="fix" :class="{ active: tab === 'changes' }" @click="tab = 'changes'">修改记录（{{ fix.changes.length }}）</button>
@@ -217,6 +226,9 @@ onUnmounted(() => clearTimeout(timer))
         <div v-show="tab === 'epubcheck'">
           <p class="muted small">{{ fix && !viewOriginal ? '最新版本' : '原书' }}的 EPUBCheck 官方校验结果。</p>
           <EpubcheckList :report="fix && !viewOriginal ? fix.epubcheck : audit.epubcheck" />
+        </div>
+        <div v-if="versions.length && tab === 'preview'">
+          <PreviewPanel :pid="id" :versions="versions" :want="previewWant" />
         </div>
         <div v-if="fix?.rebuild" v-show="tab === 'board'">
           <ConfirmBoard :pid="id" :busy="busy" :stamp="meta.updated" @rebuild="runFix('rebuild', true)" @started="load" />

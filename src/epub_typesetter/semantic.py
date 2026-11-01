@@ -328,7 +328,7 @@ CLUSTER_ROLES = ('para', 'quote', 'center', 'right', 'chapter', 'section', 'meta
 
 
 def cluster_key(b: Block) -> str:
-    """段落样式簇：原元素、原类名、字号级、粗体、对齐、缩进相同的块归一簇（软件设计建议 §4）。"""
+    """段落样式簇：原元素、原类名、字号级、粗体、对齐、缩进相同的块归一簇（docs/设计说明.md §4）。"""
     return '|'.join((_local(b.el.tag), b.el.get('class') or '', f's{b.size}', 'b' if b.bold else '',
                      b.align, f'i{int(b.indent)}'))
 

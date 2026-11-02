@@ -3,7 +3,7 @@ import zipfile
 
 import pytest
 
-from epub_typesetter.book import Book, EpubError, repair_xml_bytes
+from epub_typesetter.book import NS, Book, EpubError, repair_xml_bytes
 
 from conftest import make_epub
 
@@ -83,3 +83,18 @@ def test_html_entities_become_chars_not_entity_nodes():
     root = b.tree('OEBPS/Text/c2.xhtml').getroot()
     assert ''.join(root.itertext()).endswith('\u00a0甲—')
     assert all(isinstance(e.tag, str) for e in root.iter())
+
+
+def test_touch_modified_updates_timestamp():
+    import re
+    from epub_typesetter import engine
+    b = Book.load(make_epub())
+    engine.fix(b)                                   # 升级到 EPUB 3
+    md = b.opf.find('opf:metadata', NS)
+    old = md.find("opf:meta[@property='dcterms:modified']", NS)
+    old.text = '2000-01-01T00:00:00Z'
+    b.touch_modified()
+    mods = md.findall("opf:meta[@property='dcterms:modified']", NS)
+    assert len(mods) == 1 and mods[0].text != '2000-01-01T00:00:00Z'
+    assert re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ', mods[0].text)
+    assert engine.fix(Book.load(b.to_bytes())).changes == []      # 不影响幂等

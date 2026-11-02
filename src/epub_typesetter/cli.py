@@ -60,6 +60,7 @@ def cmd_fix(a):
     book = Book.load(original)
     ws, _ = _waivers(a)
     rep = engine.fix(book, rules=engine.select(a.rules), waivers=ws)
+    book.touch_modified()
     out = book.to_bytes()
     with open(a.output, 'wb') as f:
         f.write(out)

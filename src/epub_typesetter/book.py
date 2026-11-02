@@ -221,6 +221,18 @@ class Book:
         """该文件的当前路径及其全部原路径。"""
         return {path} | self.origins.get(path, set())
 
+    def touch_modified(self) -> None:
+        """把 dcterms:modified 改成当前时间（01 §4.1）。每次输出新文件都要调：阅读器（如苹果图书）按
+        「唯一标识 + 修改时间」认书，时间不变会被当成旧书、沿用旧的目录缓存。只有 EPUB 3 才写。"""
+        if not self.version.startswith('3'):
+            return
+        from .upgrade import _meta, now_utc
+        md = self.opf.find('opf:metadata', NS)
+        for m in md.findall("opf:meta[@property='dcterms:modified']", NS):
+            md.remove(m)
+        _meta(md, 'dcterms:modified', now_utc())
+        self.mark_dirty(self.opf_path)
+
     def mark_dirty(self, path: str) -> None:
         self._dirty.add(path)
 

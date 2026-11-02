@@ -138,6 +138,7 @@ def fix(pid: str, mode: str = 'basic') -> None:
         store.write_json(pid, 'board.json', board.build(orep.analysis, orep.rebuild.head_kind, decisions))
         rep = engine.FixReport(orep.fix.changes + orep.refix.changes, orep.fix.before, orep.refix.after,
                                orep.fix.skipped + orep.refix.skipped)
+        book.touch_modified()
         out = book.to_bytes()
         bc = compare_blocks(orep.analysis.blocks, REMOVED_ROLES, Book.load(out))
         result['text'] = {'equal': bc.ok, 'length': bc.chars_before, 'summary': bc.summary(),
@@ -158,6 +159,7 @@ def fix(pid: str, mode: str = 'basic') -> None:
         }
     else:
         rep = engine.fix(book, waivers=ws)
+        book.touch_modified()
         out = book.to_bytes()
         diff = compare_text(Book.load(original), Book.load(out))
         result['text'] = {'equal': diff.equal, 'length': diff.length, 'summary': diff.summary(),

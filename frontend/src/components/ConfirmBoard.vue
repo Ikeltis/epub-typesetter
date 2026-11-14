@@ -85,6 +85,8 @@ function setMatter(h, v) { if (v === h.matter && !h.decided_matter) delete d.val
 const headDiffers = (h) => h.llm && (h.llm.kind !== headKind(h) || (h.llm.matter || '') !== (headMatter(h) || ''))
 function adoptHead(h) { if (h.llm) { setHead(h, h.llm.kind); if (h.llm.matter || headMatter(h)) setMatter(h, h.llm.matter || '') } }
 const showHeads = ref(false)
+const HEAD_PAGE = 600                        // 一次渲染的标题行数（每行有输入框和下拉框，长篇连载可达上千章）
+const headLimit = ref(HEAD_PAGE)
 const headQuery = ref('')
 const headTouched = (h) => h.key in d.value.heads || h.key in d.value.matter || h.key in d.value.titles || h.key in d.value.drop
 const headsShown = computed(() => {
@@ -237,7 +239,7 @@ function adoptAll(min = 0.8) {
       <span v-if="dropCount" class="small warn-text">将删除 {{ dropCount }} 处章节</span>
     </div>
     <table v-if="headsShown.length" class="heads"><tbody>
-      <tr v-for="h in headsShown.slice(0, 600)" :key="h.key"
+      <tr v-for="h in headsShown.slice(0, headLimit)" :key="h.key"
           :class="{ changed: headTouched(h), off: dropState[h.key] }">
         <td class="chk">
           <label v-if="headKind(h) !== 'para' && dropState[h.key] !== 'parent'" class="small drop"
@@ -267,6 +269,11 @@ function adoptAll(min = 0.8) {
         </td>
       </tr>
     </tbody></table>
+    <p v-if="headsShown.length > headLimit" class="row small more">
+      <span class="muted">已显示 {{ headLimit }} 个，共 {{ headsShown.length }} 个</span>
+      <button @click="headLimit += HEAD_PAGE">再显示 {{ Math.min(HEAD_PAGE, headsShown.length - headLimit) }} 个</button>
+      <button @click="headLimit = headsShown.length">全部显示</button>
+    </p>
 
     <template v-if="data.alts?.length">
       <h3>图片描述（大模型草稿，{{ data.alts.length }} 张）</h3>
@@ -360,6 +367,7 @@ tr.off td.chk { opacity: 1; }
 .title-input:hover, .title-input:focus { border-color: var(--border); background: var(--bg); }
 tr.changed .title-input { font-weight: 600; }
 label.drop { white-space: nowrap; }
+.more { gap: 8px; align-items: center; margin-top: 8px; }
 .card-lite { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; margin: 10px 0; }
 .card-lite p { margin: 6px 0; }
 .llm-cell { width: 22%; }

@@ -188,5 +188,5 @@ def build(an: Analysis, head_kind: dict, decisions: dict | None = None) -> dict:
                           'decided_matter': decisions['matter'].get(k),
                           'decided_title': decisions['titles'].get(k), 'dropped': dropped,
                           'drop_blocks': b.attrs.get('drop_blocks', 0)})
-    return {'heads': heads[:MAX_ITEMS], 'clusters': clusters, 'roles': [{'value': r, 'label': ROLE_LABELS[r]} for r in CLUSTER_ROLES],
+    return {'heads': heads, 'clusters': clusters, 'roles': [{'value': r, 'label': ROLE_LABELS[r]} for r in CLUSTER_ROLES],
             'structures': sorted(kinds.values(), key=lambda k: -k['total']), 'suggestions': sugg}

@@ -325,6 +325,8 @@ def run(llm: LLM, an: Analysis, head_kind: dict, tasks: set[str], progress=None,
         if job is not None:
             text, heads = job
             keys = block_keys(an.blocks)
+            if progress:
+                progress(0, 0, f'标题层级与辅文（重型模型一次看全书 {len(heads)} 个标题，可能要几分钟）')
             try:
                 r = llm.ask('heavy', SYSTEM_HEADS, text, HeadReview, max_tokens=32000)
             except ContentBlocked:

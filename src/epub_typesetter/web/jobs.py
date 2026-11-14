@@ -240,11 +240,14 @@ def llm(pid: str, wanted: list[str], prev: str = 'fixed') -> None:
         client = LLM(LLMSettings.load(store.root()), os.path.join(store.root(), 'llm-cache'))
         book = Book.load(store.path(pid, 'original.epub'))
         decisions = board.load(store.path(pid, 'decisions.json'))
+        store.update(pid, message='大模型分析：先按当前决定重新分析书的结构（大书要一两分钟）')
         orep = optimize(book, decisions=decisions)
 
-        def progress(done, total):
-            if done % 3 == 0 or done == total:
-                store.update(pid, message=f'大模型分析：{done}/{total}')
+        def progress(done, total, note=None):
+            if note:
+                store.update(pid, message=f'大模型分析：{note}')
+            elif done % 3 == 0 or done == total:
+                store.update(pid, message=f'大模型分析：段落、结构、图片 {done}/{total}')
         # 传同一个 book：规范修复可能改过图片文件名，图片键按修复后的路径算（重建不动图片）
         res = llm_tasks.run(client, orep.analysis, orep.rebuild.head_kind, set(wanted) & LLM_TASKS, progress, book)
         res['base_url'] = client.settings.effective_base_url

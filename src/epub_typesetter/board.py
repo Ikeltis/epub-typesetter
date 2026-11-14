@@ -8,7 +8,9 @@
 
 用户的决定存成 decisions：
   {"version": 1, "clusters": {簇键: 角色}, "kinds": {类别: 是否接受}, "items": {结构或建议的键: 是否接受},
-   "heads": {块键: part/chapter/section/subsection/para}, "matter": {块键: 辅文类型}, "alts": {图片键: 描述}}
+   "heads": {块键: part/chapter/section/subsection/para}, "matter": {块键: 辅文类型}, "alts": {图片键: 描述},
+   "titles": {标题块键: 改后的标题文字}, "drop": {标题块键: true}}
+drop 删除的是这个标题到下一个同级或更高级标题之间的全部内容（rebuild.py）。
 建议的类别在 kinds/items 里以「s-」开头（如 s-poem），与已识别的结构区分。
 """
 from __future__ import annotations
@@ -17,7 +19,7 @@ import json
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from .semantic import CLUSTER_ROLES, MATTERS, REASSIGNABLE, Analysis, block_keys, cluster_key
+from .semantic import CLUSTER_ROLES, MATTERS, REASSIGNABLE, Analysis, block_keys, cluster_key, heading_text
 
 HEAD_KINDS = ('part', 'chapter', 'section', 'subsection', 'para')
 
@@ -31,11 +33,12 @@ KIND_LABELS = {'poem': '诗歌', 'letter': '书信', 'ol': '有序列表', 'dl':
                'junk': '广告页（删除）', 's-ad': '零散广告行'}
 MAX_SAMPLES = 3
 MAX_ITEMS = 2000
+MAX_TITLE = 200
 
 
 def empty() -> dict:
     return {'version': DECISIONS_VERSION, 'clusters': {}, 'kinds': {}, 'items': {}, 'heads': {}, 'matter': {},
-            'alts': {}}
+            'alts': {}, 'titles': {}, 'drop': {}}
 
 
 def load(path: str | Path) -> dict:
@@ -44,7 +47,7 @@ def load(path: str | Path) -> dict:
         return empty()
     d = json.loads(p.read_text(encoding='utf-8'))
     out = empty()
-    for k in ('clusters', 'kinds', 'items', 'heads', 'matter', 'alts'):
+    for k in ('clusters', 'kinds', 'items', 'heads', 'matter', 'alts', 'titles', 'drop'):
         if isinstance(d.get(k), dict):
             out[k] = d[k]
     return out
@@ -69,7 +72,21 @@ def clean(d: dict) -> dict:
     for k, v in (d.get('alts') or {}).items():
         if isinstance(k, str) and isinstance(v, str):
             out['alts'][k] = clean_alt(v)
+    for k, v in (d.get('titles') or {}).items():
+        if isinstance(k, str) and isinstance(v, str) and clean_title(v):
+            out['titles'][k] = clean_title(v)
+    for k, v in (d.get('drop') or {}).items():
+        if isinstance(k, str) and v is True:
+            out['drop'][k] = True
     return out
+
+
+def clean_title(v: str) -> str:
+    """用户改写的标题：去不可见字符、合并空白（章号与章名之间的全角空格保留），限长。"""
+    import re
+    v = re.sub(r'[\u200b\u2060\ufeff]', '', v)
+    v = re.sub(r'[ \t\r\n\u00a0]+', ' ', v).strip(' \u3000')
+    return v[:MAX_TITLE]
 
 
 def clean_alt(v: str) -> str:
@@ -153,15 +170,23 @@ def build(an: Analysis, head_kind: dict, decisions: dict | None = None) -> dict:
             'lines': [blocks[i].text[:60] for i in sg.get('blocks', [])[:4]],
         })
     # 4) 标题（供大模型的层级建议对照、逐个改）
+    #    被用户删除的章节仍列出（标记 dropped），好让用户撤销；随上级一起删的子标题标记 parent
     keys = block_keys(blocks)
     heads = []
     for b in blocks:
-        if b.role == 'heading' or keys[b.idx] in decisions['heads']:
+        role = b.attrs.get('pre_drop', b.role)
+        k = keys[b.idx]
+        if role == 'heading' or k in decisions['heads']:
             kind = head_kind.get(b.idx)
             cur = {'part': 'part', 'chapter': 'chapter'}.get(kind) or (
-                'subsection' if b.attrs.get('force') == 'subsection' else 'section') if b.role == 'heading' else 'para'
-            heads.append({'key': keys[b.idx], 'text': b.text[:60], 'doc': b.doc.rsplit('/', 1)[-1], 'kind': cur,
-                          'matter': b.attrs.get('matter', ''), 'decided': decisions['heads'].get(keys[b.idx]),
-                          'decided_matter': decisions['matter'].get(keys[b.idx])})
+                'subsection' if b.attrs.get('force') == 'subsection' else 'section') if role == 'heading' else 'para'
+            dropped = 'self' if k in decisions['drop'] and role == 'heading' else (
+                'parent' if b.attrs.get('pre_drop') else '')
+            heads.append({'key': k, 'text': b.text[:60], 'full': heading_text(blocks, b)[:MAX_TITLE],
+                          'doc': b.doc.rsplit('/', 1)[-1], 'kind': cur,
+                          'matter': b.attrs.get('matter', ''), 'decided': decisions['heads'].get(k),
+                          'decided_matter': decisions['matter'].get(k),
+                          'decided_title': decisions['titles'].get(k), 'dropped': dropped,
+                          'drop_blocks': b.attrs.get('drop_blocks', 0)})
     return {'heads': heads[:MAX_ITEMS], 'clusters': clusters, 'roles': [{'value': r, 'label': ROLE_LABELS[r]} for r in CLUSTER_ROLES],
             'structures': sorted(kinds.values(), key=lambda k: -k['total']), 'suggestions': sugg}

@@ -6,7 +6,8 @@
 - 角色 → 语义标签：figure+figcaption、ul、blockquote、p.source/meta/align-*；
 - 注释 → 全书一个书末尾注文件（noteref + ol/li + ↩ 回链），全书连续编号（04 §4.12）；
 - 去掉表现型 span/style，统一换成主题样式表（themes/default.css，来自 guide/03、04）；
-- 书内目录页、注释区小标题、广告页删除（全部记录在 RebuildReport.removed，供文字校验与界面展示）；
+- 书内目录页、注释区小标题、广告页、用户在确认板上删除的章节删除（全部记录在 RebuildReport.removed，供文字校验与界面展示）；
+- 用户在确认板上改写的标题文字整行替换（注号、锚点保留）；
 - 重新生成封面页、nav、NCX。
 
 - 成组结构（structures.py 识别）：诗歌、书信、有序列表、定义列表与术语表、中文序号项、条文、
@@ -29,8 +30,8 @@ from lxml import etree
 from .book import NS, Book
 from .nav import NCX, Entry, build_nav, ncx_path
 from .rules.content import Z3998_URI
-from .semantic import (BULLET_RE, NOTE_LABEL_RE, Analysis, Block, _local, _size_level, _style_of, class_styles,
-                       figure_images)
+from .semantic import (BULLET_RE, NOTE_LABEL_RE, Analysis, Block, _local, _size_level, _style_of, block_keys,
+                       class_styles, figure_images)
 from .structures import ARTICLE, CN_ITEM, OL_NUM
 from .tables import rebuild_table
 from .upgrade import book_language, content_properties
@@ -41,7 +42,7 @@ XML_LANG = '{http://www.w3.org/XML/1998/namespace}lang'
 KEEP_INLINE = {'a', 'b', 'strong', 'i', 'em', 'sup', 'sub', 'u', 's', 'del', 'ins', 'abbr', 'cite', 'q', 'code',
                'kbd', 'samp', 'ruby', 'rt', 'rp', 'rb', 'small', 'time', 'var', 'dfn', 'mark', 'bdi', 'bdo', 'wbr',
                'br', 'img', 'span'}
-REMOVED_ROLES = {'toc', 'note-head', 'junk', 'cover'}
+REMOVED_ROLES = {'toc', 'note-head', 'junk', 'cover', 'dropped'}
 TYPE_BY_TITLE = [
     (re.compile(r'^版权'), 'copyright-page', None),
     (re.compile(r'^(编辑手记|前言|序|序言|自序|推荐序|代序|引言|导言|导读|致读者|写在前面)'), 'preface', 'doc-preface'),
@@ -202,6 +203,7 @@ class Rebuilder:
         self.endnotes: list[tuple[int, Block, str]] = []  # (注序号, 注块, 首次引用所在新文档)
         self.frag_map: dict[tuple[str, str], str] = {}   # (旧文档, id) → 新 id（id 被替换时）
         self.removed_docs: set[str] = set()
+        self.dropped_anchors: set[tuple[str, str]] = set()   # 用户删除的章节里的锚点：指向它们的链接只留文字
         self.tpl_used: set[str] = set()                   # 用到的 04 模板，样式表只追加这些
         self.block_path: dict[int, str] = {}              # 块序号 → 新文档
         self.target_ids: dict[int, str] = {}              # 被目录引用的图、表块序号 → 输出 id（figure-N / table-N）
@@ -263,10 +265,46 @@ class Rebuilder:
                 cls = {1: 'section-title', 2: 'subsection-title'}.get(depth)
                 self.head_out[h.idx] = (min(cur_n + depth, 6), cls, 'sub')
 
+    def drop_chapters(self) -> None:
+        """确认板上用户删除的章节：从该标题删到下一个同级或更高级标题之前（部连同其中各章一起删）。
+        块角色改为 dropped（原角色记在 attrs['pre_drop']，确认板据此仍列出标题供撤销）。
+        范围里的注文若还被保留的正文引用，照常留着、搬到书末尾注；否则一起删。"""
+        if not self.an.drop:
+            return
+        blocks = self.an.blocks
+        keys = block_keys(blocks)
+        heads = [b for b in blocks if b.role == 'heading' and b.idx in self.head_out]
+        doomed: set[int] = set()
+        for k, h in enumerate(heads):
+            if keys[h.idx] not in self.an.drop:
+                continue
+            n = self.head_out[h.idx][0]
+            end = next((x.idx for x in heads[k + 1:] if self.head_out[x.idx][0] <= n), len(blocks))
+            start = h.merged if 0 <= h.merged < h.idx else h.idx       # 章号块在前、已并入标题
+            span = set(range(start, end))
+            doomed |= span
+            h.attrs['drop_blocks'] = sum(1 for i in span if blocks[i].role not in REMOVED_ROLES)
+        if not doomed:
+            return
+        owner = {}                                       # id(<a>) → 所在块
+        for b in blocks:
+            for a in b.el.iter(X + 'a'):
+                owner[id(a)] = b.idx
+        notes = {i for i in doomed if blocks[i].role == 'note'}
+        kept_notes = {i for i in notes if any(owner.get(id(a)) not in doomed for a in self.an.noterefs.get(i, []))}
+        for i in sorted(doomed):
+            b = blocks[i]
+            if b.role in REMOVED_ROLES or i in kept_notes or (b.role == 'note-cont' and b.group in kept_notes):
+                continue
+            b.attrs['pre_drop'] = b.role
+            b.role, b.reason = 'dropped', '用户删除的章节'
+            self.dropped_anchors.update((b.doc, a) for a in b.anchors)
+
     def split(self) -> list[Chapter]:
         chapters: list[Chapter] = []
         cur = None
         self.plan_headings()
+        self.drop_chapters()
         for b in self.an.blocks:
             if b.role in REMOVED_ROLES:
                 self.rep.removed.append((b.role, b.text))
@@ -282,7 +320,7 @@ class Rebuilder:
                 chapters.append(cur)
             elif out is not None and out[2] in ('part', 'chapter') or cur is None:
                 if out is not None and out[2] in ('part', 'chapter'):
-                    cur = Chapter(b.text, kind=out[2], level=out[0])
+                    cur = Chapter(b.attrs.get('title') or b.text, kind=out[2], level=out[0])
                 else:
                     cur = Chapter('', kind='front')
                 chapters.append(cur)
@@ -399,6 +437,8 @@ class Rebuilder:
                 if hit is None and text:                 # 没有链接：按图号、题名对图注
                     key = re.sub(r'\s', '', text)
                     hit = next((i for i, c in captions.items() if c and (c.startswith(key) or key.startswith(c))), None)
+                if hit is not None and hit not in self.block_path:   # 目标图表在被删的章节里
+                    hit = None
                 if hit is None:
                     self.list_entries[e.idx] = None
                     self.rep.suggestions.append({'kind': info['kind'], 'doc': e.doc,
@@ -419,7 +459,7 @@ class Rebuilder:
             return href
         path, _, frag = href.partition('#')
         target = Book.resolve(self.cur_doc, href) if path else self.cur_doc
-        if target in self.removed_docs:
+        if target in self.removed_docs or (target, frag) in self.dropped_anchors:   # 含用户删除的章节
             return None
         if target in self.doc_map:
             new = self.id_map.get((target, frag))
@@ -586,6 +626,30 @@ class Rebuilder:
             last.tail = last.tail.rstrip(ws)
         elif last is None and dst.text:
             dst.text = dst.text.rstrip(ws)
+
+    def _retitle(self, b: Block, e: etree._Element) -> None:
+        """标题整行换成用户写的文字；原标题里的锚点（放句首）和注号（放句末）照常输出，链接与尾注不断。"""
+        tmp = _el('div')
+        for src in [b] + ([self.an.blocks[b.merged]] if b.merged >= 0 else []):
+            self.cur_doc = src.doc
+            self.inline(src.el, tmp, plain=True)
+        self.cur_doc = b.doc
+        anchors, refs = [], []
+        for x in tmp.iter():
+            if x is tmp or not isinstance(x.tag, str):
+                continue
+            if _local(x.tag) == 'a' and 'noteref' in (x.get('class') or ''):
+                c = copy.deepcopy(x)
+                c.tail = None
+                refs.append(c)
+            elif _local(x.tag) == 'span' and x.get('id') and not ''.join(x.itertext()).strip():
+                anchors.append(_el('span', {'id': x.get('id')}))
+        for x in anchors + refs:
+            e.append(x)
+        if anchors:
+            anchors[-1].tail = b.attrs['title']
+        else:
+            e.text = b.attrs['title']
 
     def _only_noteref(self, el) -> bool:
         """el 不是注号本身，但里面有注号，且除注号文字外没有别的文字。"""
@@ -781,7 +845,9 @@ class Rebuilder:
             else:
                 cls = {'source': 'source', 'meta': 'meta', 'right': 'align-right', 'center': 'align-center'}
                 e = _el('p', {'class': cls.get(b.role)})
-            if b.role == 'heading' and b.merged >= 0:     # 章号与章名两个标题合并：「第一回　章名」
+            if b.role == 'heading' and b.attrs.get('title'):   # 确认板上改写的标题
+                self._retitle(b, e)
+            elif b.role == 'heading' and b.merged >= 0:     # 章号与章名两个标题合并：「第一回　章名」
                 other = self.an.blocks[b.merged]
                 first, second = (b, other) if b.ordinal_first else (other, b)
                 self.cur_doc = first.doc

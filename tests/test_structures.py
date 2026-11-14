@@ -317,7 +317,7 @@ def test_decisions_clean_rejects_garbage():
     d = board.clean({'clusters': {'a': 'quote', 'b': 'evil'}, 'kinds': {'poem': 'yes'}, 'items': {'x': False},
                      'extra': 1})
     assert d == {'version': 1, 'clusters': {'a': 'quote'}, 'kinds': {}, 'items': {'x': False}, 'heads': {}, 'matter': {},
-                 'alts': {}}
+                 'alts': {}, 'titles': {}, 'drop': {}}
     d = board.clean({'heads': {'k': 'section', 'j': 'h7'}, 'matter': {'k': 'afterword', 'j': 'evil'}})
     assert d['heads'] == {'k': 'section'} and d['matter'] == {'k': 'afterword'}
 
@@ -418,3 +418,83 @@ def test_stray_ad_line_only_suggested():
     out, rep, _ = rebuild_with(c1, accept)
     assert find(out, lambda e: e.text == '更多好书请关注公众号某某书屋')[1] is None
     assert ('junk', '更多好书请关注公众号某某书屋') in rep.rebuild.removed
+
+
+# ---------- 确认板：改标题文字、删章节 ----------
+
+def nav_labels(book) -> list[str]:
+    nav = next(p for p in book.content_docs() if 'nav' in book.item_by_path(p).properties)
+    toc = next(n for n in book.tree(nav).getroot().iter(X + 'nav') if n.get(EPUB_T) == 'toc')
+    return [''.join(a.itertext()) for a in toc.iter(X + 'a')]
+
+
+def test_board_retitle_heading():
+    c1 = '<h1>第一章　旧名</h1>' + P + '<h2>一个小节</h2>' + P
+
+    def decide(bd):
+        h = next(h for h in bd['heads'] if h['text'] == '第一章　旧名')
+        assert h['full'] == '第一章　旧名' and h['dropped'] == ''
+        sub = next(x['key'] for x in bd['heads'] if x['text'] == '一个小节')
+        return {'titles': {h['key']: '第一章　新的名字', sub: '改过的小节'}}
+    out, rep, bd = rebuild_with(c1, decide)
+    path, h = find(out, lambda e: e.get('class') == 'chapter-title' and '新的名字' in ''.join(e.itertext()))
+    assert h is not None and ''.join(h.itertext()) == '第一章　新的名字'
+    assert out.tree(path).getroot().find(f'{X}head/{X}title').text == '第一章　新的名字'
+    assert find(out, lambda e: '旧名' in (e.text or ''))[1] is None
+    assert find(out, lambda e: e.get('class') == 'section-title')[1].text == '改过的小节'
+    assert nav_labels(out)[:2] == ['第一章　新的名字', '改过的小节']
+    assert next(h for h in bd['heads'] if h['text'] == '第一章　旧名')['decided_title'] == '第一章　新的名字'
+
+
+def test_board_retitle_keeps_anchor_in_heading():
+    """标题里的锚点（别处链接的目标）改名后仍在，链接不断。"""
+    body = '<h1><a id="mark"></a>第一章　旧名</h1>' + P
+    back = '<h1>第二章</h1>' + P + '<p>回到<a href="c1.xhtml#mark">第一章</a>。</p>'
+
+    def decide(bd):
+        return {'titles': {bd['heads'][0]['key']: '第一章　新名'}}
+    out, rep, _ = rebuild_with(body, decide, back)
+    path, h = find(out, lambda e: e.get('class') == 'chapter-title' and '新名' in ''.join(e.itertext()))
+    assert ''.join(h.itertext()) == '第一章　新名'
+    ids = {e.get('id') for e in h.iter() if e.get('id')}
+    _, p = find(out, lambda e: e.tag == X + 'p' and '回到' in ''.join(e.itertext()))
+    href = p.find(X + 'a').get('href')
+    assert href.endswith('#mark') and 'mark' in ids and path.endswith(href.split('#')[0])
+
+
+def test_board_drop_chapter_keeps_notes_cited_elsewhere():
+    """删第二章：正文、小节都删，指向它的链接只留文字；第一章引用的注文虽在第二章里，仍搬到书末尾注。"""
+    body = '<h1>第一章</h1>' + P + '<p>见<a href="c2.xhtml#t2">下一章</a>，正文甲<a id="z1" href="c2.xhtml#bz1">1</a>结束。</p>'
+    gone = ('<h1 id="t2">第二章</h1><p>第二章独有的文字，要删掉的。</p><h2>第二章的小节</h2>' + P +
+            '<p><b>第一章　注释</b></p><p><a id="bz1" href="c1.xhtml#z1">[1]</a>《某书》，某社出版。</p>')
+
+    def decide(bd):
+        return {'drop': {next(h['key'] for h in bd['heads'] if h['text'] == '第二章'): True}}
+    out, rep, bd = rebuild_with(body, decide, gone)
+    assert find(out, lambda e: '第二章独有' in (e.text or ''))[1] is None
+    assert not any('第二章' in t for t in nav_labels(out))
+    assert ('dropped', '第二章独有的文字，要删掉的。') in rep.rebuild.removed
+    assert rep.rebuild.notes == 1
+    _, li = find(out, lambda e: e.tag == X + 'li' and e.get('id') == 'note-1')
+    assert ''.join(li.itertext()).startswith('《某书》')
+    _, p = find(out, lambda e: e.tag == X + 'p' and '下一章' in ''.join(e.itertext()))
+    assert not any(a.get('href') and 'noteref' not in (a.get('class') or '') for a in p.iter(X + 'a'))
+    heads = {h['text']: h for h in bd['heads']}
+    assert heads['第二章']['dropped'] == 'self' and heads['第二章']['drop_blocks'] >= 3
+    assert heads['第二章的小节']['dropped'] == 'parent'
+
+
+def test_board_drop_section_only():
+    c1 = '<h1>第一章</h1>' + P + '<h2>第一节</h2><p>第一节的文字。</p><h2>第二节</h2><p>第二节的文字。</p>'
+
+    def decide(bd):
+        return {'drop': {next(h['key'] for h in bd['heads'] if h['text'] == '第一节'): True}}
+    out, rep, bd = rebuild_with(c1, decide)
+    assert find(out, lambda e: e.text == '第一节的文字。')[1] is None
+    assert find(out, lambda e: e.text == '第二节的文字。')[1] is not None
+    assert nav_labels(out)[:2] == ['第一章', '第二节']
+
+
+def test_decisions_clean_titles_and_drop():
+    d = board.clean({'titles': {'k': '  第一章​　新名\n ', 'e': '   ', 'n': 3}, 'drop': {'k': True, 'j': 'yes'}})
+    assert d['titles'] == {'k': '第一章　新名'} and d['drop'] == {'k': True}

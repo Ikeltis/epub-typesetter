@@ -9,14 +9,14 @@ const emit = defineEmits(['rebuild', 'started'])
 const data = ref(null)
 const error = ref('')
 const saving = ref(false)
-const d = ref({ clusters: {}, kinds: {}, items: {}, heads: {}, matter: {}, alts: {} })   // 正在编辑的决定
+const d = ref({ clusters: {}, kinds: {}, items: {}, heads: {}, matter: {}, alts: {}, titles: {}, drop: {} })   // 正在编辑的决定
 const open = ref({})                                     // 展开的结构类别
 const showSmall = ref(false)
 
 async function load() {
   try {
     data.value = await api.board(props.pid)
-    d.value = { heads: {}, matter: {}, alts: {}, ...JSON.parse(JSON.stringify(data.value.decisions)) }
+    d.value = { heads: {}, matter: {}, alts: {}, titles: {}, drop: {}, ...JSON.parse(JSON.stringify(data.value.decisions)) }
     error.value = ''
   } catch (e) { data.value = null; error.value = e.message }
 }
@@ -57,7 +57,7 @@ function toggleSugg(s, on) {
 const dirty = computed(() => data.value && JSON.stringify(d.value) !== JSON.stringify(data.value.decisions))
 const changed = computed(() => Object.keys(d.value.clusters).length + Object.keys(d.value.kinds).length
   + Object.keys(d.value.items).length + Object.keys(d.value.heads).length + Object.keys(d.value.matter).length
-  + Object.keys(d.value.alts).length)
+  + Object.keys(d.value.alts).length + Object.keys(d.value.titles).length + Object.keys(d.value.drop).length)
 
 // ---- 图片描述草稿 ----
 const altShown = ref(60)
@@ -85,7 +85,38 @@ function setMatter(h, v) { if (v === h.matter && !h.decided_matter) delete d.val
 const headDiffers = (h) => h.llm && (h.llm.kind !== headKind(h) || (h.llm.matter || '') !== (headMatter(h) || ''))
 function adoptHead(h) { if (h.llm) { setHead(h, h.llm.kind); if (h.llm.matter || headMatter(h)) setMatter(h, h.llm.matter || '') } }
 const showHeads = ref(false)
-const headsShown = computed(() => (data.value?.heads || []).filter((h) => showHeads.value || h.llm || h.key in d.value.heads || h.key in d.value.matter))
+const headQuery = ref('')
+const headTouched = (h) => h.key in d.value.heads || h.key in d.value.matter || h.key in d.value.titles || h.key in d.value.drop
+const headsShown = computed(() => {
+  const q = headQuery.value.trim()
+  const all = data.value?.heads || []
+  if (q) return all.filter((h) => (h.full || h.text).includes(q) || (d.value.titles[h.key] || '').includes(q))
+  return all.filter((h) => showHeads.value || h.llm || headTouched(h) || h.dropped || dropState.value[h.key])
+})
+
+// ---- 改标题文字、删章节（重建时：删到下一个同级或更高级标题之前，部连同其中各章） ----
+const titleOf = (h) => d.value.titles[h.key] ?? h.full ?? h.text
+function setTitle(h, v) {
+  v = v.trim()
+  if (!v || v === (h.full ?? h.text)) delete d.value.titles[h.key]
+  else d.value.titles[h.key] = v
+}
+const RANK = { part: 0, chapter: 1, section: 2, subsection: 3 }
+// 按当前（含未保存的）决定推算每个标题的删除状态：self 自己勾了删除，parent 随上级一起删
+const dropState = computed(() => {
+  const out = {}
+  let active = null
+  for (const h of data.value?.heads || []) {
+    const r = RANK[headKind(h)]
+    if (r === undefined) continue
+    if (active !== null && r <= active) active = null
+    if (d.value.drop[h.key]) { out[h.key] = 'self'; if (active === null) active = r }
+    else if (active !== null) out[h.key] = 'parent'
+  }
+  return out
+})
+function setDrop(h, on) { if (on) d.value.drop[h.key] = true; else delete d.value.drop[h.key] }
+const dropCount = computed(() => Object.values(dropState.value).filter((v) => v === 'self').length)
 
 async function save() {
   saving.value = true
@@ -94,7 +125,7 @@ async function save() {
     emit('rebuild')
   } catch (e) { error.value = e.message } finally { saving.value = false }
 }
-function reset() { d.value = { clusters: {}, kinds: {}, items: {}, heads: {}, matter: {}, alts: {} } }
+function reset() { d.value = { clusters: {}, kinds: {}, items: {}, heads: {}, matter: {}, alts: {}, titles: {}, drop: {} } }
 
 // ---- 大模型 ----
 const llmTasks = ref({ clusters: true, structures: true, heads: true, alts: false })
@@ -196,12 +227,31 @@ function adoptAll(min = 0.8) {
       </tbody>
     </table>
 
-    <h3>标题（{{ data.heads?.length || 0 }} 个）</h3>
-    <p class="muted small">决定每个标题的级别，以及章一级的辅文类型（前言、后记等，影响语义标注和导航）。
+    <h3>标题与章节（{{ data.heads?.length || 0 }} 个）</h3>
+    <p class="muted small">决定每个标题的级别、章一级的辅文类型（前言、后记等，影响语义标注和导航）；
+      标题文字可以直接改（目录跟着变）；勾「删除」会删掉这个标题到下一个同级或更高级标题之间的全部内容（删部即连同其中各章），
+      指向被删内容的链接只留文字，被别处引用的注释照常保留。
       默认只列大模型有意见或你改过的；<a href="#" @click.prevent="showHeads = !showHeads">{{ showHeads ? '只看有意见的' : '列出全部标题' }}</a>。</p>
-    <table v-if="headsShown.length" class="items"><tbody>
-      <tr v-for="h in headsShown.slice(0, 600)" :key="h.key" :class="{ changed: h.key in d.heads || h.key in d.matter }">
-        <td>{{ h.text }}</td>
+    <div class="row head-tools">
+      <input v-model="headQuery" type="search" placeholder="按标题文字查找" />
+      <span v-if="dropCount" class="small warn-text">将删除 {{ dropCount }} 处章节</span>
+    </div>
+    <table v-if="headsShown.length" class="heads"><tbody>
+      <tr v-for="h in headsShown.slice(0, 600)" :key="h.key"
+          :class="{ changed: headTouched(h), off: dropState[h.key] }">
+        <td class="chk">
+          <label v-if="headKind(h) !== 'para' && dropState[h.key] !== 'parent'" class="small drop"
+                 :title="'删除这个标题及其下的内容' + (h.dropped === 'self' && h.drop_blocks ? `（上次删了 ${h.drop_blocks} 段）` : '')">
+            <input type="checkbox" :checked="!!d.drop[h.key]" @change="setDrop(h, $event.target.checked)" /> 删除</label>
+          <span v-else-if="dropState[h.key] === 'parent'" class="small muted">随上级删除</span>
+        </td>
+        <td class="title-cell">
+          <input v-if="headKind(h) !== 'para'" class="title-input" :value="titleOf(h)"
+                 :title="h.key in d.titles ? '原标题：' + (h.full || h.text) : '点击可改标题文字'"
+                 @change="setTitle(h, $event.target.value)" />
+          <template v-else>{{ h.text }}</template>
+          <button v-if="h.key in d.titles" class="link" @click="setTitle(h, '')">还原</button>
+        </td>
         <td class="small muted mono">{{ h.doc }}</td>
         <td><select :value="headKind(h)" @change="setHead(h, $event.target.value)">
           <option v-for="[v, l] in HEAD_KINDS" :key="v" :value="v">{{ l }}</option></select></td>
@@ -302,6 +352,14 @@ tr.changed td { background: var(--accent-weak); }
 .chk { width: 1%; }
 tr.off td { opacity: .5; }
 tr.off td.llm-cell { opacity: 1; }
+tr.off td.chk { opacity: 1; }
+.head-tools { gap: 12px; margin-bottom: 6px; }
+.head-tools input { width: 16em; }
+.heads td.title-cell { width: 50%; white-space: nowrap; }
+.title-input { width: calc(100% - 3em); box-sizing: border-box; font: inherit; border: 1px solid transparent; background: transparent; padding: 2px 4px; }
+.title-input:hover, .title-input:focus { border-color: var(--border); background: var(--bg); }
+tr.changed .title-input { font-weight: 600; }
+label.drop { white-space: nowrap; }
 .card-lite { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; margin: 10px 0; }
 .card-lite p { margin: 6px 0; }
 .llm-cell { width: 22%; }

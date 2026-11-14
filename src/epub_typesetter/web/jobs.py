@@ -120,7 +120,7 @@ ROLE_NAMES = {'h1': '一级标题', 'h2': '二级标题', 'h3': '三级标题', 
               'center': '居中短行', 'keep': '表格等原样保留', 'poem': '诗歌', 'letter': '书信', 'ol': '有序列表项',
               'dl': '定义列表', 'item': '序号项', 'article': '条文', 'loi-head': '插图/表格目录标题',
               'loi-entry': '插图/表格目录条目', 'table-caption': '表题', 'table-note': '表注', 'note-cont': '注释续段',
-              'heading-merged': '已并入标题', 'cover': '原封面页', 'h4': '四级标题', 'h5': '五级标题', 'h6': '六级标题'}
+              'heading-merged': '已并入标题', 'cover': '原封面页', 'dropped': '用户删除的章节', 'h4': '四级标题', 'h5': '五级标题', 'h6': '六级标题'}
 SUGGEST_NAMES = {'poem': '诗歌', 'letter': '书信', 'loi': '插图目录', 'lot': '表格目录', 'table': '表格',
                  'glossary': '术语表', 'script': '剧本对白'}
 
@@ -192,7 +192,7 @@ def fix(pid: str, mode: str = 'basic') -> None:
 def decision_stats(pid: str, decisions: dict) -> dict:
     """用户决定的条数，其中有多少与大模型的意见一致（视为采纳了大模型建议）。"""
     llm = store.read_json(pid, 'llm.json') or {}
-    n = sum(len(decisions.get(k) or {}) for k in ('clusters', 'kinds', 'items', 'heads', 'matter', 'alts'))
+    n = sum(len(decisions.get(k) or {}) for k in ('clusters', 'kinds', 'items', 'heads', 'matter', 'alts', 'titles', 'drop'))
     m = 0
     for k, v in (decisions.get('clusters') or {}).items():
         m += (llm.get('clusters') or {}).get(k, {}).get('role') == v

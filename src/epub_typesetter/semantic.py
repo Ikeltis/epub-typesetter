@@ -95,6 +95,7 @@ class Analysis:
     units: dict[int, dict] = field(default_factory=dict)   # 成组结构：编号 → {kind, level(A/B), …}
     alt_text: dict[str, str] = field(default_factory=dict)  # 用户采纳的图片描述：图片键 → alt
     suggestions: list[dict] = field(default_factory=list)  # 只给建议、不自动改的识别结果（C 级，04 各节「识别信号」）
+    drop: set[str] = field(default_factory=set)         # 用户要删除的章节：标题块键（重建时按层级定范围）
 
     def counts(self) -> Counter:
         return Counter(b.role if b.role != 'heading' else f'h{b.level}' for b in self.blocks)
@@ -387,6 +388,30 @@ def apply_block_roles(blocks: list[Block], heads: dict[str, str], matter: dict[s
             b.attrs['matter'] = matter[k]
 
 
+def heading_text(blocks: list[Block], b: Block) -> str:
+    """标题的完整文字：章号、章名两块合并的，按输出顺序用全角空格连起来（与重建一致）。"""
+    if b.merged < 0:
+        return b.text
+    other = blocks[b.merged]
+    first, second = (b, other) if b.ordinal_first else (other, b)
+    return f'{first.text}\u3000{second.text}'
+
+
+def apply_titles(blocks: list[Block], titles: dict[str, str]) -> None:
+    """确认板上改写的标题文字：重建时整行换成新文字（注号保留），文字校验按新文字核对。"""
+    if not titles:
+        return
+    keys = block_keys(blocks)
+    for b in blocks:
+        t = titles.get(keys[b.idx])
+        if not t or b.role != 'heading':
+            continue
+        b.attrs['title'] = t
+        b.verify = t
+        if b.merged >= 0:                     # 并入的章号（或章名）块已含在新文字里
+            blocks[b.merged].verify = ''
+
+
 def apply_cluster_roles(blocks: list[Block], clusters: dict[str, str]) -> None:
     """按用户在确认板上给的整簇角色改写块角色。"""
     if not clusters:
@@ -653,8 +678,10 @@ def analyze(book: Book, decisions: dict | None = None) -> Analysis:
             b.role, b.reason = 'quote', '原有 <blockquote>'
     apply_cluster_roles(blocks, decisions.get('clusters') or {})
     apply_block_roles(blocks, decisions.get('heads') or {}, decisions.get('matter') or {})
+    apply_titles(blocks, decisions.get('titles') or {})
     an = Analysis(blocks, toc, noterefs, junk_docs, is_vertical(book))
     an.alt_text = {k: v for k, v in (decisions.get('alts') or {}).items() if isinstance(v, str)}
+    an.drop = {k for k, v in (decisions.get('drop') or {}).items() if v is True}
     # 9) 成组结构：诗歌、书信、列表、条文、插图目录、表题表注、术语表（structures.py），再按用户取舍
     from .structures import detect
     detect(book, an, decisions)

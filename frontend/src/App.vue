@@ -21,7 +21,7 @@ const bookTab = computed(() => route.value[2] || '')
     <span style="flex:1"></span>
     <a href="#/settings" class="small">大模型设置</a>
   </header>
-  <main class="container">
+  <main class="container" :class="{ wide: bookId && hash !== '#/settings' }">
     <SettingsView v-if="hash === '#/settings'" />
     <BookDetail v-else-if="bookId" :id="bookId" :key="bookId" :initial-tab="bookTab" />
     <BookList v-else />

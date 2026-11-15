@@ -12,9 +12,14 @@ const props = defineProps({ id: String, initialTab: { type: String, default: '' 
 const data = ref(null)
 const rules = ref({})
 const error = ref('')
-const tab = ref(props.initialTab || 'issues')
+// 工作区：左侧导航选主区内容，预览是可随时开关的右侧面板。
+// 旧地址 #/book/<id>/preview 仍有效：打开预览面板。没指定时，有确认板就进确认板，否则进概况
+const TABS = ['overview', 'board', 'issues', 'changes', 'epubcheck', 'rebuild']
+const tab = ref(TABS.includes(props.initialTab) ? props.initialTab : '')
+const previewOpen = ref(props.initialTab === 'preview' || localStorage.getItem('previewOpen') === '1')
+watch(previewOpen, (v) => localStorage.setItem('previewOpen', v ? '1' : '0'))
 // 当前标签页写进地址，刷新后停在原处
-watch(tab, (t) => { history.replaceState(null, '', `#/book/${props.id}${t === 'issues' ? '' : '/' + t}`) })
+watch(tab, (t) => { if (t) history.replaceState(null, '', `#/book/${props.id}/${t}`) })
 let timer
 
 const meta = computed(() => data.value?.meta)
@@ -27,7 +32,6 @@ const sum = computed(() => data.value?.summary)
 const mode = ref('rebuild')
 const open = ref({})
 const viewOriginal = ref(false)
-const details = ref(null)
 const shownIssues = computed(() => (fix.value && !viewOriginal.value ? fix.value.after : audit.value.issues))
 // 已保存的决定还没进最新版本：最新版本不是重建，或它用的决定数与现在不同，或保存后还没重新生成
 const pendingDecisions = computed(() => {
@@ -44,23 +48,33 @@ const when = (t) => new Date(t * 1000).toLocaleString('zh-CN', { month: '2-digit
 const previewWant = ref('')
 function preview(which) {
   previewWant.value = which
-  openTab('preview')
+  previewOpen.value = true
 }
 function openTab(t) {
   tab.value = t
   viewOriginal.value = false
-  details.value?.scrollIntoView({ behavior: 'smooth' })
+  window.scrollTo({ top: 0 })
 }
 function showOriginal() {
   viewOriginal.value = true
   tab.value = 'issues'
-  details.value?.scrollIntoView({ behavior: 'smooth' })
+  window.scrollTo({ top: 0 })
 }
+// 顶栏的主按钮：确认板上有没保存或还没生成进书的决定时，就是「按确认结果重新生成」
+const board = ref(null)
+const boardDirty = computed(() => !!board.value?.unsaved)
+const needRegen = computed(() => boardDirty.value || pendingDecisions.value)
+function regenerate() {
+  if (boardDirty.value) board.value.save()          // 先存决定，存完由确认板触发重建
+  else runFix('rebuild', true)
+}
+const latestIssues = computed(() => (fix.value ? fix.value.after.total : audit.value?.issues.total))
 
 async function load() {
   try {
     data.value = await api.book(props.id)
     error.value = ''
+    if (!tab.value && data.value.audit) tab.value = data.value.fix?.rebuild ? 'board' : 'overview'
   } catch (e) { error.value = e.message }
   clearTimeout(timer)
   if (busy.value) timer = setTimeout(load, 1500)
@@ -94,29 +108,54 @@ onUnmounted(() => clearTimeout(timer))
 </script>
 
 <template>
-  <p><a href="#/">← 返回列表</a></p>
   <p v-if="error" class="notice error">{{ error }}</p>
   <template v-if="meta">
-    <section class="card">
-      <div class="row">
-        <h1 class="title">{{ meta.title || meta.filename }}</h1>
-        <StatusBadge :status="meta.status" />
+    <header class="bookbar">
+      <div class="row top">
+        <a href="#/" class="back" title="返回书库">←</a>
+        <div class="tt">
+          <div class="row"><h1 class="title" :title="meta.filename">{{ meta.title || meta.filename }}</h1><StatusBadge :status="meta.status" /></div>
+          <div class="muted small info" :title="meta.filename">
+            {{ meta.author || '作者未知' }} · EPUB {{ meta.version || '?' }}<template v-if="audit"> · {{ audit.book.documents }} 个正文文件 · {{ kb(meta.size) }}</template>
+          </div>
+        </div>
         <span class="spacer"></span>
-        <button class="danger" :disabled="busy" @click="remove">删除</button>
+        <template v-if="audit">
+          <div class="row gen">
+            <select v-model="mode" :disabled="busy" title="生成方式">
+              <option value="rebuild">排版重建</option>
+              <option value="basic">仅规范修复</option>
+            </select>
+            <button :class="{ primary: !needRegen }" :disabled="busy" @click="runFix(mode)">生成</button>
+          </div>
+          <button v-if="needRegen" class="primary" :disabled="busy" @click="regenerate"
+                  :title="boardDirty ? '保存确认板上的改动并重新生成' : '已保存的决定还没生成进书里'">按确认结果重新生成</button>
+          <a v-if="versions.length" class="btn" :href="api.downloadUrl(id, 'v' + versions[0].n)" :title="`下载版本 ${versions[0].n}`">下载最新</a>
+          <button v-if="versions.length" :class="{ on: previewOpen }" @click="previewOpen = !previewOpen">预览</button>
+        </template>
+        <button class="danger quiet" :disabled="busy" title="删除这本书" @click="remove">删除</button>
       </div>
-      <p class="muted small">
-        {{ meta.author || '作者未知' }} · {{ meta.filename }} · EPUB {{ meta.version || '?' }}
-        <template v-if="audit"> · {{ audit.book.documents }} 个正文文件 · {{ kb(meta.size) }}</template>
-      </p>
-      <p v-if="busy" class="row"><span class="spinner"></span>
+      <p v-if="busy" class="row status"><span class="spinner"></span>
         {{ meta.status === 'fixing' ? '正在修复并重新校验，较大的书需要几十秒…'
           : meta.status === 'thinking' ? (meta.message || '大模型分析中…') : '正在体检（含 epubcheck 校验）…' }}</p>
-      <p v-if="meta.status === 'error'" class="notice error">{{ meta.message }}</p>
-      <p v-else-if="!busy && meta.message" class="notice">{{ meta.message }}</p>
-    </section>
+      <p v-if="meta.status === 'error'" class="notice error status">{{ meta.message }}</p>
+      <p v-else-if="!busy && meta.message" class="notice status">{{ meta.message }}</p>
+    </header>
 
-    <template v-if="audit">
-      <section class="card steps">
+    <div v-if="audit" class="workspace" :class="{ 'has-side': previewOpen && versions.length }">
+      <nav class="sidenav">
+        <button :class="{ active: tab === 'overview' }" @click="openTab('overview')">概况</button>
+        <button v-if="fix?.rebuild" :class="{ active: tab === 'board' }" @click="openTab('board')">
+          确认板<span v-if="needRegen" class="dot" title="有决定还没生成进书里"></span></button>
+        <button :class="{ active: tab === 'issues' }" @click="openTab('issues')">问题清单<span class="count">{{ latestIssues }}</span></button>
+        <button v-if="fix" :class="{ active: tab === 'changes' }" @click="openTab('changes')">修改记录<span class="count">{{ fix.changes.length }}</span></button>
+        <div class="sep">更多</div>
+        <button :class="{ active: tab === 'epubcheck' }" @click="openTab('epubcheck')">epubcheck</button>
+        <button v-if="fix?.rebuild" :class="{ active: tab === 'rebuild' }" @click="openTab('rebuild')">重建详情</button>
+      </nav>
+
+      <div class="main">
+      <section v-show="tab === 'overview'" class="card steps">
         <!-- ① 体检 -->
         <div class="step done">
           <div class="num">1</div>
@@ -203,37 +242,35 @@ onUnmounted(() => clearTimeout(timer))
         </div>
       </section>
 
-      <section class="card" ref="details">
-        <div class="row" style="margin-bottom:8px">
-          <h2 style="margin:0; font-size:17px">详细信息</h2>
-          <span class="muted small">{{ fix && !viewOriginal ? `最新版本（版本 ${versions[0]?.n ?? ''}）` : '原书' }}</span>
-          <a v-if="fix" href="#" class="small" @click.prevent="viewOriginal = !viewOriginal">{{ viewOriginal ? '看最新版本' : '看原书' }}</a>
-        </div>
-        <div class="tabs row">
-          <button :class="{ active: tab === 'issues' }" @click="tab = 'issues'">
-            问题清单（{{ shownIssues.total }}）</button>
-          <button :class="{ active: tab === 'epubcheck' }" @click="tab = 'epubcheck'">epubcheck</button>
-          <button v-if="versions.length" :class="{ active: tab === 'preview' }" @click="tab = 'preview'">预览</button>
-          <button v-if="fix?.rebuild" :class="{ active: tab === 'board' }" @click="tab = 'board'">确认板</button>
-          <button v-if="fix?.rebuild" :class="{ active: tab === 'rebuild' }" @click="tab = 'rebuild'">重建详情</button>
-          <button v-if="fix" :class="{ active: tab === 'changes' }" @click="tab = 'changes'">修改记录（{{ fix.changes.length }}）</button>
-        </div>
-        <div v-show="tab === 'issues'">
+        <section class="card pane" v-if="fix?.rebuild" v-show="tab === 'board'">
+          <ConfirmBoard ref="board" :pid="id" :busy="busy" :stamp="meta.updated" @rebuild="runFix('rebuild', true)" @started="load" />
+        </section>
+        <section class="card pane" v-show="tab === 'issues'">
+          <div class="row srcbar">
+            <span class="muted small">当前看的是{{ fix && !viewOriginal ? `最新版本（版本 ${versions[0]?.n ?? ''}）` : '原书' }}</span>
+            <a v-if="fix" href="#" class="small" @click.prevent="viewOriginal = !viewOriginal">{{ viewOriginal ? '看最新版本' : '看原书' }}</a>
+          </div>
           <p class="muted small">{{ fix && !viewOriginal ? '最新版本里仍存在的问题' : '原书的问题' }}，按文件分组。有意保留的写法可以「忽略」（须写理由），之后生成会跳过它。</p>
           <p v-if="fix?.waivers_changed" class="notice">豁免已更改。下载的文件仍是按旧豁免修复的，重新点「仅规范修复」或「排版重建」后才生效。</p>
           <IssueReport :report="shownIssues" :pid="id" :busy="busy" @changed="load" />
-        </div>
-        <div v-show="tab === 'epubcheck'">
+        </section>
+        <section class="card pane" v-if="fix" v-show="tab === 'changes'">
+          <ChangeLog :changes="fix.changes" :rules="rules" />
+          <template v-if="!fix.text.equal">
+            <h3>正文文字差异</h3>
+            <table><tbody><tr v-for="(c, i) in fix.text.changes" :key="i">
+              <td class="mono small">{{ c.file }}</td><td>{{ c.before }}</td><td>→ {{ c.after }}</td></tr></tbody></table>
+          </template>
+        </section>
+        <section class="card pane" v-show="tab === 'epubcheck'">
+          <div class="row srcbar">
+            <span class="muted small">当前看的是{{ fix && !viewOriginal ? `最新版本（版本 ${versions[0]?.n ?? ''}）` : '原书' }}</span>
+            <a v-if="fix" href="#" class="small" @click.prevent="viewOriginal = !viewOriginal">{{ viewOriginal ? '看最新版本' : '看原书' }}</a>
+          </div>
           <p class="muted small">{{ fix && !viewOriginal ? '最新版本' : '原书' }}的 EPUBCheck 官方校验结果。</p>
           <EpubcheckList :report="fix && !viewOriginal ? fix.epubcheck : audit.epubcheck" />
-        </div>
-        <div v-if="versions.length && tab === 'preview'">
-          <PreviewPanel :pid="id" :versions="versions" :want="previewWant" />
-        </div>
-        <div v-if="fix?.rebuild" v-show="tab === 'board'">
-          <ConfirmBoard :pid="id" :busy="busy" :stamp="meta.updated" @rebuild="runFix('rebuild', true)" @started="load" />
-        </div>
-        <div v-if="fix?.rebuild" v-show="tab === 'rebuild'">
+        </section>
+        <section class="card pane" v-if="fix?.rebuild" v-show="tab === 'rebuild'">
           <p class="muted small">程序识别出的内容类型，以及被删除的内容（书内目录页由导航取代，广告/引流内容、注释区小标题不再需要）。</p>
           <template v-if="fix.rebuild.structures?.length">
             <h3 style="margin-top:0">按模板改写的结构</h3>
@@ -263,23 +300,59 @@ onUnmounted(() => clearTimeout(timer))
               <p v-if="fix.rebuild.removed_total > fix.rebuild.removed.length" class="muted small">仅显示前 {{ fix.rebuild.removed.length }} 条</p>
             </div>
           </div>
+        </section>
+      </div>
+
+      <aside v-if="previewOpen && versions.length" class="side card">
+        <div class="row sidehead">
+          <strong>预览</strong><span class="spacer"></span>
+          <button class="quiet" title="关闭预览" @click="previewOpen = false">×</button>
         </div>
-        <div v-if="fix" v-show="tab === 'changes'">
-          <ChangeLog :changes="fix.changes" :rules="rules" />
-          <template v-if="!fix.text.equal">
-            <h3>正文文字差异</h3>
-            <table><tbody><tr v-for="(c, i) in fix.text.changes" :key="i">
-              <td class="mono small">{{ c.file }}</td><td>{{ c.before }}</td><td>→ {{ c.after }}</td></tr></tbody></table>
-          </template>
-        </div>
-      </section>
-    </template>
+        <PreviewPanel :pid="id" :versions="versions" :want="previewWant" side />
+      </aside>
+    </div>
   </template>
 </template>
 
 <style scoped>
-.title { font-size: 22px; margin: 0; }
-.tiles { margin-top: 14px; align-items: stretch; }
+/* ---- 顶栏：固定在页面顶部，主操作始终可见 ---- */
+.bookbar { position: sticky; top: 0; z-index: 10; background: var(--surface); border-bottom: 1px solid var(--border);
+  margin: 0 -24px 16px; padding: 10px 24px; }
+.bookbar .top { gap: 10px; flex-wrap: nowrap; }
+.back { font-size: 20px; text-decoration: none; padding: 0 4px; }
+.tt { min-width: 0; }
+.tt .row { gap: 8px; flex-wrap: nowrap; }
+.title { font-size: 19px; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.info { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gen { gap: 0; flex-wrap: nowrap; }
+.gen select { font: inherit; font-size: 14px; padding: 6px 8px; border: 1px solid var(--border); border-right: none;
+  border-radius: 6px 0 0 6px; background: var(--surface); height: 36px; }
+.gen button { border-radius: 0 6px 6px 0; height: 36px; }
+.bookbar button, .bookbar .btn { white-space: nowrap; height: 36px; }
+button.on { background: var(--accent-weak); border-color: var(--accent); color: var(--accent); }
+.quiet { border-color: transparent; background: transparent; }
+.danger.quiet { color: var(--muted); }
+.danger.quiet:hover { color: var(--error); border-color: transparent; }
+.status { margin: 8px 0 0; }
+
+/* ---- 工作区：左导航 | 主区 | 右侧预览 ---- */
+.workspace { display: grid; grid-template-columns: 148px minmax(0, 1fr); gap: 20px; align-items: start; }
+.workspace.has-side { grid-template-columns: 148px minmax(0, 1fr) auto; }
+.sidenav { position: sticky; top: 84px; display: flex; flex-direction: column; gap: 2px; }
+.sidenav button { justify-content: space-between; border-color: transparent; background: transparent; text-align: left; width: 100%; }
+.sidenav button:hover { background: var(--surface); border-color: var(--border); }
+.sidenav button.active { background: var(--surface); border-color: var(--border); font-weight: 600; }
+.sidenav .count { color: var(--muted); font-size: 12px; font-weight: 400; }
+.sidenav .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warning); }
+.sidenav .sep { margin: 12px 0 2px; padding-left: 14px; color: var(--muted); font-size: 12px; }
+.main > .card { margin-bottom: 20px; }
+.srcbar { margin-bottom: 4px; }
+.side { position: sticky; top: 84px; max-height: calc(100vh - 100px); overflow: auto; padding: 12px 16px; margin: 0;
+  width: min-content; min-width: 320px; max-width: 60vw; }
+.sidehead { margin-bottom: 6px; }
+.sidehead button { padding: 2px 10px; font-size: 18px; }
+
+/* ---- 概况（原四步） ---- */
 .steps { display: flex; flex-direction: column; gap: 4px; }
 .step { display: flex; gap: 14px; padding: 12px 0; border-top: 1px solid var(--border); }
 .step:first-child { border-top: none; padding-top: 0; }
@@ -287,17 +360,35 @@ onUnmounted(() => clearTimeout(timer))
   font-weight: 700; background: var(--info-weak); color: var(--muted); }
 .step.done .num { background: var(--ok-weak); color: var(--ok); }
 .step.off { opacity: .55; }
-.step .body { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+.step .body { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .choices { gap: 18px; align-items: center; }
 .choices label { display: flex; flex-direction: column; gap: 2px; }
 .versions td { padding: 6px 8px; vertical-align: middle; }
 .versions tr.latest td { font-weight: 500; }
 .versions tr.detail td { border-bottom: none; padding-top: 0; }
-.versions .act { text-align: right; white-space: nowrap; display: flex; gap: 10px; align-items: center; justify-content: flex-end; }
+.versions .act { text-align: right; white-space: nowrap; }
+.versions .act > * + * { margin-left: 10px; }
 .bad { color: var(--error); }
 .good { color: var(--ok); }
 .badge { margin-left: 6px; }
-.tabs { gap: 4px; border-bottom: 1px solid var(--border); margin: -4px 0 12px; padding-bottom: 8px; }
-.tabs button { border-color: transparent; }
-.tabs button.active { border-color: var(--border); background: var(--bg); font-weight: 600; }
+
+/* ---- 窄屏：单栏，导航横排，预览放到内容上方；版本表各行折成卡片 ---- */
+@media (max-width: 1000px) {
+  .workspace, .workspace.has-side { grid-template-columns: minmax(0, 1fr); }
+  .sidenav { position: static; flex-direction: row; overflow-x: auto; gap: 4px; }
+  .sidenav button { width: auto; flex: none; gap: 6px; }
+  .sidenav .sep { display: none; }
+  .side { position: static; max-height: none; max-width: none; order: -1; }
+  .bookbar .top { flex-wrap: wrap; }
+  .bookbar { position: static; }
+  .tt { flex: 1 1 calc(100% - 44px); order: -1; }
+  .back { order: -2; }
+}
+@media (max-width: 700px) {
+  .versions, .versions tbody { display: block; }
+  .versions tr { display: flex; flex-wrap: wrap; gap: 2px 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .versions td { border: none; padding: 0; }
+  .versions tr.detail td:first-child { display: none; }
+  .versions .act { width: 100%; text-align: left; }
+}
 </style>

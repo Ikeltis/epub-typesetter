@@ -1,12 +1,13 @@
 <script setup>
 // 实时预览：屏宽、日夜、字号统一设置；可并排对比两个版本（默认左原件、右最新版本）。
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import PreviewPane from './PreviewPane.vue'
 
 const props = defineProps({
   pid: { type: String, required: true },
   versions: { type: Array, default: () => [] },
   want: { type: String, default: '' },              // 外部指定要看的版本（下载列表里点「预览」）
+  side: Boolean,                                     // 放在工作区右侧：高度随窗口，「桌面」宽度收窄，说明收进提示
 })
 
 const DEVICES = { phone: [375, 667, '手机'], tablet: [768, 1024, '平板'], desktop: [0, 800, '桌面'] }
@@ -30,7 +31,17 @@ const left = ref('original')
 watch(() => props.want, (w) => { if (w) right.value = w })
 watch(() => props.versions[0]?.n, (n, old) => { if (n && right.value === (old ? 'v' + old : 'original')) right.value = 'v' + n })
 
-const size = computed(() => DEVICES[device.value])
+const vh = ref(window.innerHeight)
+const onResize = () => { vh.value = window.innerHeight }
+onMounted(() => window.addEventListener('resize', onResize))
+onUnmounted(() => window.removeEventListener('resize', onResize))
+// 右侧面板里：屏幕高度撑满窗口（减去顶栏、工具栏、选版本章节），「桌面」给固定宽度（面板宽度由内容决定）
+const size = computed(() => {
+  const [w, h, label] = DEVICES[device.value]
+  if (!props.side) return [w, h, label]
+  return [w || 720, Math.max(360, vh.value - 365), label]
+})
+const NOTE = '直接打开书里的章节文件渲染，和阅读器看到的一致。夜间、护眼模拟阅读器的强制改色；书里专为系统夜间模式写的样式以实机为准。暂为滚动阅读，不模拟翻页。'
 </script>
 
 <template>
@@ -50,8 +61,9 @@ const size = computed(() => DEVICES[device.value])
       <button @click="fontScale = Math.min(200, fontScale + 10)">A+</button>
     </div>
     <label class="small"><input v-model="compare" type="checkbox" /> 并排对比</label>
+    <span v-if="side" class="muted small help" :title="NOTE">ⓘ</span>
   </div>
-  <p class="muted small">直接打开书里的章节文件渲染，和阅读器看到的一致。夜间、护眼模拟阅读器的强制改色；书里专为系统夜间模式写的样式以实机为准。暂为滚动阅读，不模拟翻页。</p>
+  <p v-if="!side" class="muted small">{{ NOTE }}</p>
   <div class="panes" :class="{ two: compare }">
     <PreviewPane v-if="compare" v-model="left" :pid="pid" :options="options" :width="size[0]" :height="size[1]"
                  :theme="theme" :font-scale="fontScale" :start="startChapter" />
@@ -67,6 +79,7 @@ const size = computed(() => DEVICES[device.value])
 .seg button:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
 .seg button:last-child { border-radius: 0 6px 6px 0; }
 .seg button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.help { cursor: help; }
 .panes { display: flex; gap: 20px; overflow-x: auto; padding-bottom: 6px; }
 .panes > * { flex: 0 1 auto; }
 .panes:not(.two) > * { margin: 0 auto; }

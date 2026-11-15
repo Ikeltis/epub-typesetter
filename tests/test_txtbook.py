@@ -104,7 +104,8 @@ def test_to_epub_package():
     docs = [it.path for it in book.spine_items()]
     assert len(docs) == 8                                    # 开头一份 + 7 个标题各一份
     first = book.files[docs[0]].decode('utf-8')
-    assert '<hr/>' in first and '书名：测试仙途' in first     # 开头的文字原样保留
+    assert '<hr/>' in first and '更多精校小说' in first       # 开头的其他文字原样保留（广告由确认板建议删除）
+    assert '书名：' not in first and '作者：' not in first     # 已写进元数据的书名、作者行不留在正文
     assert '<h1>第一卷</h1>' in book.files[docs[2]].decode('utf-8')
     assert '<h2>第1章 下山</h2>' in book.files[docs[3]].decode('utf-8')
     ncx = book.files['OEBPS/toc.ncx'].decode('utf-8')
@@ -161,3 +162,17 @@ def test_upload_txt(client):
 def test_upload_binary_txt_rejected(client):
     r = client.post('/api/books', files={'file': ('a.txt', bytes(range(256)) * 20, 'text/plain')})
     assert r.status_code == 400
+
+
+def test_txt_source_ad_suggested_with_rules():
+    """「==== / 更多精校小说尽在…下载：http://… / ====」列为零散广告行建议，勾选后连同分隔线一起删。"""
+    from epub_typesetter.pipeline import optimize
+    src = txtbook.to_epub(WEBNOVEL.encode('gb18030'), 'x.txt')
+    o = optimize(Book.load(src))
+    ads = [sg for sg in o.analysis.suggestions if sg['kind'] == 'ad']
+    assert len(ads) == 1 and len(ads[0]['blocks']) == 3            # 广告行 + 上下两条分隔线
+    book = Book.load(src)
+    o = optimize(book, decisions={'items': {ads[0]['key']: True}})
+    text = ''.join(book.files[p].decode('utf-8') for p in book.content_docs())
+    assert '更多精校小说' not in text and '<hr' not in text
+    assert sum(r == 'junk' for r, _ in o.rebuild.removed) == 3        # 删除清单里列出（广告 + 两条分隔线）

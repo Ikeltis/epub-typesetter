@@ -7,7 +7,7 @@ TXT 只有文字，结构靠猜，规则尽量保守，猜不准的交给确认�
 - 标题：「第X卷/部/集」为部，「第X章/回/节/话」、序、楔子、尾声、后记、番外、Chapter N 等为章；
   正文几乎都缩进时，不缩进的短行也算章标题。只认短行、不以句末标点结尾，长句不会被当成标题。
   按标题拆成文件，之后由排版重建和确认板（改级别、不是标题、改文字、删章）接手。
-- 书名、作者：取开头的「书名：」「作者：」行，没有就从文件名取（去掉括号里的作者、来源）。
+- 书名、作者：取开头的「书名：」「作者：」行（取用后从正文删去），没有就从文件名取（去掉括号里的作者、来源）。
 - 只由同一符号组成的分隔行（==== 等）转成 <hr/>；其他文字原样保留，广告行由后面的识别处理。
 
 输出 EPUB 2（XHTML 1.1 + NCX），由之后的规范修复升级为 EPUB 3。
@@ -195,14 +195,24 @@ def _from_filename(filename: str) -> tuple[str, str]:
     return title, author
 
 
-def metadata(paras: list[Para], filename: str) -> tuple[str, str]:
-    title, author = '', ''
+def _meta_lines(paras: list[Para]) -> tuple[Para | None, Para | None]:
+    """开头（第一个标题之前、前 30 段内）的「书名：」「作者：」行。"""
+    title = author = None
     for p in paras[:30]:
+        if p.kind in ('part', 'chapter'):
+            break
         m = META_LINE_RE.match(p.text)
-        if m and m.group(1) in ('书名', '書名') and not title:
-            title = m.group(2).strip().strip('《》')
-        elif m and m.group(1) == '作者' and not author:
-            author = m.group(2).strip()
+        if m and m.group(1) in ('书名', '書名') and title is None and m.group(2).strip():
+            title = p
+        elif m and m.group(1) == '作者' and author is None and m.group(2).strip():
+            author = p
+    return title, author
+
+
+def metadata(paras: list[Para], filename: str) -> tuple[str, str]:
+    tp, ap = _meta_lines(paras)
+    title = META_LINE_RE.match(tp.text).group(2).strip().strip('《》') if tp else ''
+    author = META_LINE_RE.match(ap.text).group(2).strip() if ap else ''
     ft, fa = _from_filename(filename)
     return title or ft or '未命名', author or fa
 
@@ -230,6 +240,9 @@ def to_epub(raw: bytes, filename: str = '') -> bytes:
         raise TxtError('文件里没有文字')
     classify(paras)
     title, author = metadata(paras, filename)
+    # 开头的「书名：」「作者：」行已写进元数据（阅读器书架上显示），不再留在正文里
+    used = {id(p) for p in _meta_lines(paras) if p is not None}
+    paras = [p for p in paras if id(p) not in used]
     secs = sections(paras)
 
     files: dict[str, bytes] = {}

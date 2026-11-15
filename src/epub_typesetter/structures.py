@@ -578,7 +578,9 @@ def apply_decisions(ctx: _Ctx, decisions: dict) -> None:
             title = ctx.blocks[sg['title']] if sg.get('title') is not None else None
             make_poem(ctx, blocks, title, None, 'C')
         elif sg['kind'] == 'ad' and blocks:
-            for b in blocks:
+            # 框住广告的分隔线（_framing_rules）角色是 keep，不在 _free 的范围内，单独带上
+            rules = [ctx.blocks[i] for i in sg['blocks'] if _local(ctx.blocks[i].el) == 'hr' and ctx.blocks[i].unit < 0]
+            for b in blocks + rules:
                 b.role, b.reason = 'junk', '用户确认：夹在正文里的广告'
         elif sg['kind'] == 'table':
             ctx.blocks[sg['blocks'][0]].attrs['tfoot'] = True
@@ -606,7 +608,9 @@ def apply_decisions(ctx: _Ctx, decisions: dict) -> None:
 # 夹在正文里的广告行：比整页判定更严，必须是短行且含明确的引流用语；只给建议，勾选才删
 AD_LINE = re.compile(r'公众号|微信号|微信搜索|扫码|扫一扫|关注(我们|本号)|更多(好书|电子书|精彩|资源)|'
                      r'电子书(搜索|下载|打包)|免费(下载|电子书)|书友群|交流群|QQ群|加群|'
-                     r'本书由.{0,12}(整理|制作|分享|提供)|下载站|读累了')
+                     r'本书由.{0,12}(整理|制作|分享|提供)|下载站|读累了|'
+                     # 网文 TXT 的来源广告：「更多精校小说尽在知轩藏书下载：http://…」
+                     r'精校(小说|电子书|好书)|(小说|藏书|txt|好书)下载|尽在.{0,12}(下载|书屋|小说网|书城)', re.I)
 
 
 def detect_junk_pages(ctx: _Ctx) -> None:
@@ -620,6 +624,25 @@ def detect_junk_pages(ctx: _Ctx) -> None:
         for b in bs:
             b.unit, b.part = u, 'junk'
             ctx.orig[b.idx] = b.attrs['pre_junk']
+
+
+def _framing_rules(ctx: _Ctx, b) -> list:
+    """框住广告行的分隔线（TXT 常见「==== / 广告 / ====」）：上下都是分隔线，或一边是分隔线、
+    另一边是文件开头或结尾，就随广告一起建议删除——只删广告会留下两条孤零零的横线。"""
+    def at(i):
+        return ctx.blocks[i] if 0 <= i < len(ctx.blocks) and ctx.blocks[i].doc == b.doc else None
+
+    def is_rule(x):
+        return x is not None and _local(x.el) == 'hr' and x.unit < 0
+
+    prev, nxt = at(b.idx - 1), at(b.idx + 1)
+    if is_rule(prev) and is_rule(nxt):
+        return [prev, nxt]
+    if is_rule(prev) and nxt is None:
+        return [prev]
+    if is_rule(nxt) and prev is None:
+        return [nxt]
+    return []
 
 
 def detect_ad_lines(ctx: _Ctx) -> None:
@@ -637,7 +660,7 @@ def detect_ad_lines(ctx: _Ctx) -> None:
             continue
         if not AD_LINE.search(b.text) or re.search('[“”「」]', b.text):     # 带引号的多半是对话、引文
             continue
-        ctx.suggest('ad', b, f'疑似夹在正文里的广告：{b.text[:40]}', [b])
+        ctx.suggest('ad', b, f'疑似夹在正文里的广告：{b.text[:40]}', [b] + _framing_rules(ctx, b))
         n += 1
         if n >= 50:
             break

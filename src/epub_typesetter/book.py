@@ -12,6 +12,7 @@ import posixpath
 import re
 import zipfile
 from dataclasses import dataclass, field
+from functools import lru_cache
 from urllib.parse import quote, unquote
 
 from lxml import etree
@@ -195,6 +196,7 @@ class Book:
         return posixpath.dirname(self.opf_path)
 
     @staticmethod
+    @lru_cache(maxsize=65536)     # 纯函数（只依赖两个字符串），规则扫描时同一对参数会反复出现
     def resolve(base_path: str, href: str) -> str:
         """把相对 base_path（某个 zip 内文件）的 href 解析为 zip 内路径（去掉 #片段）。"""
         href = unquote(href.split('#', 1)[0])

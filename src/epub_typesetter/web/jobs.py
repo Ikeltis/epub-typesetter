@@ -5,7 +5,7 @@ import os
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 
-from .. import board, engine, epubcheck, kindle, report
+from .. import board, engine, epubcheck, kindle, report, txtbook
 from ..book import NS, Book, EpubError
 from ..pipeline import optimize
 from ..rebuild import REMOVED_ROLES
@@ -26,7 +26,7 @@ def submit(fn, pid: str, *args) -> None:
 def _guard(fn, pid, *args):
     try:
         fn(pid, *args)
-    except kindle.KindleError as e:
+    except (kindle.KindleError, txtbook.TxtError) as e:
         store.update(pid, status='error', message=str(e))
     except EpubError as e:
         store.update(pid, status='error', message=f'无法作为 EPUB 读取：{e}')
@@ -89,13 +89,17 @@ def _original_issues(pid: str, book: Book | None = None) -> dict:
 
 
 def convert(pid: str) -> None:
-    """Kindle 原文件 → original.epub（只做一次；之后的体检、修复都以它为原件）。"""
+    """Kindle、TXT 原文件 → original.epub（只做一次；之后的体检、修复都以它为原件）。"""
     meta = store.load_meta(pid)
     if not meta.source_format or os.path.exists(store.path(pid, 'original.epub')):
         return
     store.update(pid, status='converting', message='')
     with open(store.path(pid, f'source.{meta.source_format}'), 'rb') as f:
-        data = kindle.to_epub(f.read(), meta.source_format)
+        raw = f.read()
+    if meta.source_format == 'txt':
+        data = txtbook.to_epub(raw, meta.filename)
+    else:
+        data = kindle.to_epub(raw, meta.source_format)
     tmp = store.path(pid, 'original.epub.tmp')
     with open(tmp, 'wb') as f:
         f.write(data)

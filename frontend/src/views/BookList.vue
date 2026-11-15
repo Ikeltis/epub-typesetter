@@ -20,7 +20,7 @@ async function load() {
 
 async function upload(files) {
   const list = [...files].filter((f) => UPLOAD_EXTS.some((x) => f.name.toLowerCase().endsWith(x)))
-  if (!list.length) { error.value = '请选择 EPUB，或 Kindle 的 MOBI、AZW、AZW3 文件'; return }
+  if (!list.length) { error.value = '请选择 EPUB、TXT，或 Kindle 的 MOBI、AZW、AZW3 文件'; return }
   uploading.value = true
   try {
     let last
@@ -83,7 +83,7 @@ onUnmounted(() => clearTimeout(timer))
       <label class="btn primary"><input type="file" :accept="UPLOAD_EXTS.join(',')" multiple hidden
              @change="upload($event.target.files)" :disabled="uploading" />选择文件</label>
     </p>
-    <p class="muted small">支持 EPUB，以及 Kindle 的 MOBI、AZW、AZW3（先转成 EPUB；有 DRM 加密的书无法转换）。上传后会自动体检。原件不会被修改，修复结果另存一份。</p>
+    <p class="muted small">支持 EPUB、TXT，以及 Kindle 的 MOBI、AZW、AZW3（先转成 EPUB；TXT 按「第X章」等写法识别章节，有 DRM 加密的书无法转换）。上传后会自动体检。原件不会被修改，修复结果另存一份。</p>
     <p v-if="uploading" class="row"><span class="spinner"></span>上传中…</p>
     <p v-if="error" class="notice error">{{ error }}</p>
   </section>

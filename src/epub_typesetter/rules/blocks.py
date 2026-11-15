@@ -29,8 +29,11 @@ def _types(el) -> list[str]:
 
 
 def _docs(book):
+    # manifest 一次建好索引：逐个 item_by_path 每次都重解析整个 manifest，大书上是平方级开销。
+    # 这里只在开始时快照一次，本模块的规则不改 manifest，结果与逐个查找相同
+    items = {it.path: it for it in reversed(book.manifest())}     # reversed：同路径重复时保留第一个，与 item_by_path 一致
     for path in book.content_docs():
-        it = book.item_by_path(path)
+        it = items.get(path)
         if it is not None and 'nav' in it.properties:
             continue
         yield path, book.tree(path).getroot()

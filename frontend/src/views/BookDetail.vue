@@ -96,6 +96,7 @@ async function remove() {
 }
 
 const sevCount = (rep, s) => rep?.summary?.[s] || 0
+const epcCount = (r) => (r?.available ? `${r.blocking} 个错误` : '未校验')
 const kb = (n) => n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.ceil(n / 1024)} KB`
 
 onMounted(async () => {
@@ -147,7 +148,7 @@ onUnmounted(() => clearTimeout(timer))
         <button :class="{ active: tab === 'overview' }" @click="openTab('overview')">概况</button>
         <button v-if="fix?.rebuild" :class="{ active: tab === 'board' }" @click="openTab('board')">
           确认板<span v-if="needRegen" class="dot" title="有决定还没生成进书里"></span></button>
-        <button :class="{ active: tab === 'issues' }" @click="openTab('issues')">问题清单<span class="count">{{ latestIssues }}</span></button>
+        <button :class="{ active: tab === 'issues' }" @click="openTab('issues')">问题清单<span class="count" :title="fix ? `最新版本剩余问题（原书 ${audit.issues.total}）` : '原书的问题'">{{ latestIssues }}</span></button>
         <button v-if="fix" :class="{ active: tab === 'changes' }" @click="openTab('changes')">修改记录<span class="count">{{ fix.changes.length }}</span></button>
         <div class="sep">更多</div>
         <button :class="{ active: tab === 'epubcheck' }" @click="openTab('epubcheck')">epubcheck</button>
@@ -165,6 +166,8 @@ onUnmounted(() => clearTimeout(timer))
               epubcheck <b :class="{ bad: audit.epubcheck.blocking }">{{ audit.epubcheck.available ? audit.epubcheck.blocking : '—' }}</b> 个错误 ·
               本工具发现 <b>{{ audit.issues.total }}</b> 处问题（错误 {{ sevCount(audit.issues, 'error') }}、警告 {{ sevCount(audit.issues, 'warning') }}），其中 {{ autoCount }} 处可自动修
               <a href="#" @click.prevent="showOriginal()">查看</a>
+              <template v-if="fix">；最新版本（版本 {{ versions[0]?.n }}）还剩 <b>{{ fix.after.total }}</b> 处（错误 {{ sevCount(fix.after, 'error') }}、警告 {{ sevCount(fix.after, 'warning') }}）
+                <a href="#" @click.prevent="openTab('issues')">查看</a></template>
             </div>
           </div>
         </div>
@@ -246,11 +249,13 @@ onUnmounted(() => clearTimeout(timer))
           <ConfirmBoard ref="board" :pid="id" :busy="busy" :stamp="meta.updated" @rebuild="runFix('rebuild', true)" @started="load" />
         </section>
         <section class="card pane" v-show="tab === 'issues'">
-          <div class="row srcbar">
-            <span class="muted small">当前看的是{{ fix && !viewOriginal ? `最新版本（版本 ${versions[0]?.n ?? ''}）` : '原书' }}</span>
-            <a v-if="fix" href="#" class="small" @click.prevent="viewOriginal = !viewOriginal">{{ viewOriginal ? '看最新版本' : '看原书' }}</a>
+          <div v-if="fix" class="row srcbar">
+            <div class="seg">
+              <button :class="{ on: !viewOriginal }" @click="viewOriginal = false">版本 {{ versions[0]?.n }}（最新）：剩 {{ fix.after.total }} 条</button>
+              <button :class="{ on: viewOriginal }" @click="viewOriginal = true">原书：{{ audit.issues.total }} 条</button>
+            </div>
           </div>
-          <p class="muted small">{{ fix && !viewOriginal ? '最新版本里仍存在的问题' : '原书的问题' }}，按文件分组。有意保留的写法可以「忽略」（须写理由），之后生成会跳过它。</p>
+          <p class="muted small">{{ fix && !viewOriginal ? '最新版本里仍存在的问题' : '原书的问题' }}。有意保留的写法可以「忽略」（须写理由），之后生成会跳过它。</p>
           <p v-if="fix?.waivers_changed" class="notice">豁免已更改。下载的文件仍是按旧豁免修复的，重新点「仅规范修复」或「排版重建」后才生效。</p>
           <IssueReport :report="shownIssues" :pid="id" :busy="busy" @changed="load" />
         </section>
@@ -263,9 +268,11 @@ onUnmounted(() => clearTimeout(timer))
           </template>
         </section>
         <section class="card pane" v-show="tab === 'epubcheck'">
-          <div class="row srcbar">
-            <span class="muted small">当前看的是{{ fix && !viewOriginal ? `最新版本（版本 ${versions[0]?.n ?? ''}）` : '原书' }}</span>
-            <a v-if="fix" href="#" class="small" @click.prevent="viewOriginal = !viewOriginal">{{ viewOriginal ? '看最新版本' : '看原书' }}</a>
+          <div v-if="fix" class="row srcbar">
+            <div class="seg">
+              <button :class="{ on: !viewOriginal }" @click="viewOriginal = false">版本 {{ versions[0]?.n }}（最新）：{{ epcCount(fix.epubcheck) }}</button>
+              <button :class="{ on: viewOriginal }" @click="viewOriginal = true">原书：{{ epcCount(audit.epubcheck) }}</button>
+            </div>
           </div>
           <p class="muted small">{{ fix && !viewOriginal ? '最新版本' : '原书' }}的 EPUBCheck 官方校验结果。</p>
           <EpubcheckList :report="fix && !viewOriginal ? fix.epubcheck : audit.epubcheck" />
@@ -347,6 +354,11 @@ button.on { background: var(--accent-weak); border-color: var(--accent); color: 
 .sidenav .sep { margin: 12px 0 2px; padding-left: 14px; color: var(--muted); font-size: 12px; }
 .main > .card { margin-bottom: 20px; }
 .srcbar { margin-bottom: 4px; }
+.seg { display: inline-flex; }
+.seg button { border-radius: 0; margin-left: -1px; padding: 3px 12px; font-size: 13px; }
+.seg button:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
+.seg button:last-child { border-radius: 0 6px 6px 0; }
+.seg button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .side { position: sticky; top: 84px; max-height: calc(100vh - 100px); overflow: auto; padding: 12px 16px; margin: 0;
   width: min-content; min-width: 320px; max-width: 60vw; }
 .sidehead { margin-bottom: 6px; }

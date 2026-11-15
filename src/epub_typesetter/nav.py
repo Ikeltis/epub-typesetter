@@ -100,7 +100,8 @@ def _ol(entries: list[Entry], nav_path: str) -> str:
             lines.append('</li>' + '</ol></li>' * (stack - d))
         stack = d
         href = Book.relative(nav_path, e.path) + (f'#{e.fragment}' if e.fragment else '')
-        lines.append(f'<li><a href={quoteattr(href)}>{escape(e.label)}</a>')
+        # 导航里的链接必须有文字（epubcheck RSC-005）：只有图片的标题等给个占位，可在确认板上改标题或删除
+        lines.append(f'<li><a href={quoteattr(href)}>{escape(e.label.strip() or "（无标题）")}</a>')
     lines.append('</li>' + '</ol></li>' * (stack - 1) + '</ol>' if stack else '<ol><li><span>（无目录）</span></li></ol>')
     return ''.join(lines)      # 不在 li 内留换行：否则空白规则（TXT-002）会在下一轮再改一次
 

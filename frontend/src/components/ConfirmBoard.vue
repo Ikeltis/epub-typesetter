@@ -174,11 +174,10 @@ function adoptAll(min = 0.8) {
   <template v-if="data">
     <div class="row bar">
       <p class="muted small" style="margin:0; flex:1">
-        这里是上次排版重建时程序替你做的判断。改完点「按确认结果重新生成」；决定会保存，以后重建都按它来。
+        这里是上次排版重建时程序替你做的判断。改完点顶栏的「按确认结果重新生成」；决定会保存，以后重建都按它来。
         A：原书已标明；B：按规范的识别信号自动改写；C：把握不够，默认不改。
       </p>
       <button :disabled="busy || !changed" @click="reset" title="清空所有决定，回到程序默认">恢复默认</button>
-      <button class="primary" :disabled="busy || saving || (!dirty && !changed)" @click="save">按确认结果重新生成</button>
     </div>
 
     <div class="llm card-lite">

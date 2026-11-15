@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .. import __version__, board, engine, epubcheck
+from .. import __version__, board, engine, epubcheck, kindle
 from ..llm.client import LLM, LLMError
 from ..llm.settings import LLMSettings
 from ..waivers import WaiverFileError, WaiverSet
@@ -35,7 +35,7 @@ def _meta_or_404(pid: str) -> store.Meta:
 
 @app.get('/api/health')
 def health():
-    return {'ok': True, 'version': __version__, 'epubcheck': epubcheck.available()}
+    return {'ok': True, 'version': __version__, 'epubcheck': epubcheck.available(), 'kindle': kindle.available()}
 
 
 @app.get('/api/rules')
@@ -61,9 +61,20 @@ async def upload(file: UploadFile):
         data += chunk
         if len(data) > MAX_UPLOAD:
             raise HTTPException(413, f'文件超过 {MAX_UPLOAD // 1024 // 1024} MB')
-    if not jobs.is_epub_like(bytes(data[:4])):
-        raise HTTPException(400, '这不是 EPUB 文件（EPUB 是 ZIP 格式）')
-    meta = store.create(file.filename or 'book.epub', bytes(data))
+    data = bytes(data)
+    fmt = ''
+    if not jobs.is_epub_like(data[:4]):
+        ext = kindle.ext_of(file.filename or '')
+        if ext not in kindle.KINDLE_EXTS and not kindle.is_kindle(data):
+            raise HTTPException(400, '只支持 EPUB，以及 Kindle 的 MOBI、AZW、AZW3 文件')
+        try:
+            kindle.check(data)             # 加密、KFX 等直接拒绝，不进后台
+        except kindle.KindleError as e:
+            raise HTTPException(400, str(e)) from None
+        if not kindle.available():
+            raise HTTPException(400, '服务器没有安装 KindleUnpack（mobiunpack），无法转换 Kindle 格式')
+        fmt = ext if ext in kindle.KINDLE_EXTS else 'azw3'
+    meta = store.create(file.filename or 'book.epub', data, fmt)
     jobs.submit(jobs.audit, meta.id)
     return asdict(meta)
 
@@ -262,20 +273,29 @@ def view_file(pid: str, which: str, inner: str):
 
 @app.get('/api/books/{pid}/download')
 def download(pid: str, which: str = 'fixed'):
-    """which：original 原件、fixed 最近一次生成、vN 第 N 版。"""
+    """which：original 原件（EPUB；Kindle 上传的是转换结果）、source 上传的 Kindle 原文件、
+    fixed 最近一次生成、vN 第 N 版。"""
     import re as _re
     meta = _meta_or_404(pid)
-    if which in ('fixed', 'original'):
+    if which == 'source' and meta.source_format:
+        p = store.path(pid, f'source.{meta.source_format}')
+    elif which in ('fixed', 'original'):
         p = store.path(pid, f'{which}.epub')
     elif _re.fullmatch(r'v\d{1,6}', which):
         p = os.path.join(store.path(pid, 'versions'), f'{which}.epub')
     else:
-        raise HTTPException(400, 'which 只能是 original、fixed 或 vN')
+        raise HTTPException(400, 'which 只能是 original、source、fixed 或 vN')
     if not os.path.exists(p):
         raise HTTPException(404, '没有这份文件（旧版本只保留最近 5 份）')
-    stem = meta.filename[:-5] if meta.filename.lower().endswith('.epub') else meta.filename
-    name = f'{stem}.epub' if which == 'original' else f'{stem}（优化{"" if which == "fixed" else "·" + which}）.epub'
-    return FileResponse(p, media_type='application/epub+zip',
+    stem, ext = os.path.splitext(meta.filename)
+    if ext.lower().lstrip('.') not in ('epub', *kindle.KINDLE_EXTS):
+        stem = meta.filename
+    if which == 'source':
+        name, mime = f'{stem}.{meta.source_format}', 'application/x-mobipocket-ebook'
+    else:
+        name = f'{stem}.epub' if which == 'original' else f'{stem}（优化{"" if which == "fixed" else "·" + which}）.epub'
+        mime = 'application/epub+zip'
+    return FileResponse(p, media_type=mime,
                         headers={'Content-Disposition': f"attachment; filename*=UTF-8''{quote(name)}"})
 
 

@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { api, BUSY } from '../api.js'
+import { api, BUSY, UPLOAD_EXTS } from '../api.js'
 import StatusBadge from '../components/StatusBadge.vue'
 
 const books = ref([])
@@ -19,8 +19,8 @@ async function load() {
 }
 
 async function upload(files) {
-  const list = [...files].filter((f) => f.name.toLowerCase().endsWith('.epub'))
-  if (!list.length) { error.value = '请选择 .epub 文件'; return }
+  const list = [...files].filter((f) => UPLOAD_EXTS.some((x) => f.name.toLowerCase().endsWith(x)))
+  if (!list.length) { error.value = '请选择 EPUB，或 Kindle 的 MOBI、AZW、AZW3 文件'; return }
   uploading.value = true
   try {
     let last
@@ -78,12 +78,12 @@ onUnmounted(() => clearTimeout(timer))
 <template>
   <section class="card drop" :class="{ dragging }"
            @dragover.prevent="dragging = true" @dragleave="dragging = false" @drop.prevent="onDrop">
-    <h2>上传 EPUB</h2>
+    <h2>上传电子书</h2>
     <p class="muted">拖入文件，或
-      <label class="btn primary"><input type="file" accept=".epub" multiple hidden
+      <label class="btn primary"><input type="file" :accept="UPLOAD_EXTS.join(',')" multiple hidden
              @change="upload($event.target.files)" :disabled="uploading" />选择文件</label>
     </p>
-    <p class="muted small">上传后会自动体检。原件不会被修改，修复结果另存一份。</p>
+    <p class="muted small">支持 EPUB，以及 Kindle 的 MOBI、AZW、AZW3（先转成 EPUB；有 DRM 加密的书无法转换）。上传后会自动体检。原件不会被修改，修复结果另存一份。</p>
     <p v-if="uploading" class="row"><span class="spinner"></span>上传中…</p>
     <p v-if="error" class="notice error">{{ error }}</p>
   </section>
@@ -113,7 +113,7 @@ onUnmounted(() => clearTimeout(timer))
                    :title="busy(b) ? '正在处理中，不能删除' : '选中'" @change="toggle(b, $event.target.checked)" /></td>
           <td><a :href="`#/book/${b.id}`">{{ b.title || '（未读到书名）' }}</a><div class="muted small">{{ b.author }}</div></td>
           <td class="small muted">{{ b.filename }}</td>
-          <td class="mono">{{ b.version || '—' }}</td>
+          <td class="mono">{{ b.version || '—' }}<div v-if="b.source_format" class="muted small" :title="`由 ${b.source_format.toUpperCase()} 转换`">{{ b.source_format.toUpperCase() }}</div></td>
           <td class="mono">{{ size(b.size) }}</td>
           <td class="small">{{ when(b.created) }}</td>
           <td><StatusBadge :status="b.status" /></td>

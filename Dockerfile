@@ -19,6 +19,13 @@ RUN apt-get update \
  && rm /tmp/epubcheck.zip && apt-get purge -y curl unzip && apt-get autoremove -y \
  && rm -rf /var/lib/apt/lists/*
 
+# KindleUnpack（PyPI 包 mobi，GPL-3）：把 MOBI/AZW/AZW3 拆成 EPUB。装在独立虚拟环境里、按命令调用，
+# 不和本项目的 Python 包混装（kindle.py）
+ARG MOBI_VERSION=0.4.1
+RUN python -m venv /opt/kindleunpack \
+ && /opt/kindleunpack/bin/pip install --no-cache-dir "mobi==${MOBI_VERSION}" \
+ && ln -s /opt/kindleunpack/bin/mobiunpack /usr/local/bin/mobiunpack
+
 WORKDIR /app
 COPY pyproject.toml README.md LICENSE ./
 COPY src ./src

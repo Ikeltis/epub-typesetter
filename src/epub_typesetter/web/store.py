@@ -1,7 +1,8 @@
 """项目存储：每本上传的书一个目录。
 
     {DATA_DIR}/{id}/meta.json      状态与基本信息
-                   original.epub   上传原件（永不修改）
+                   original.epub   上传原件（永不修改）；上传的是 Kindle 格式时，是转换出的 EPUB
+                   source.<ext>    上传的 Kindle 原文件（mobi / azw / azw3，永不修改）
                    fixed.epub      最近一次生成的结果
                    versions/vN.epub、vN.json   每次生成各留一份（最近 5 份）与摘要
                    audit.json      体检报告
@@ -43,6 +44,7 @@ class Meta:
     title: str = ''
     author: str = ''
     version: str = ''
+    source_format: str = ''       # 上传的是 Kindle 格式时：mobi / azw / azw3（体检前先转成 original.epub）
     updated: float = field(default_factory=time.time)
 
 
@@ -57,13 +59,14 @@ def path(pid: str, name: str = '') -> str:
     return os.path.join(root(), pid, name) if name else os.path.join(root(), pid)
 
 
-def create(filename: str, data: bytes) -> Meta:
+def create(filename: str, data: bytes, source_format: str = '') -> Meta:
+    """source_format 为空：data 是 EPUB，存成 original.epub；否则是 Kindle 原文件，存成 source.<格式>。"""
     pid = secrets.token_hex(6)
     os.makedirs(path(pid))
-    with open(path(pid, 'original.epub'), 'wb') as f:
+    with open(path(pid, f'source.{source_format}' if source_format else 'original.epub'), 'wb') as f:
         f.write(data)
     clean_name = re.sub(r'[\x00-\x1f/\\]', '_', os.path.basename(filename or 'book.epub'))[:200]
-    meta = Meta(pid, clean_name, len(data), time.time())
+    meta = Meta(pid, clean_name, len(data), time.time(), source_format=source_format)
     save_meta(meta)
     return meta
 

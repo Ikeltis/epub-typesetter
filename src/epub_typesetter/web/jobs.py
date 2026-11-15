@@ -5,7 +5,7 @@ import os
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 
-from .. import board, engine, epubcheck, report
+from .. import board, engine, epubcheck, kindle, report
 from ..book import NS, Book, EpubError
 from ..pipeline import optimize
 from ..rebuild import REMOVED_ROLES
@@ -15,7 +15,7 @@ from . import store
 
 EPUBCHECK_LOCALE = os.environ.get('EPUBTS_EPUBCHECK_LOCALE', 'zh-TW')
 MAX_MESSAGES = 300
-BUSY = ('queued', 'auditing', 'fixing', 'thinking')
+BUSY = ('queued', 'converting', 'auditing', 'fixing', 'thinking')
 _pool = ThreadPoolExecutor(max_workers=int(os.environ.get('EPUBTS_WORKERS', '2')))
 
 
@@ -26,6 +26,8 @@ def submit(fn, pid: str, *args) -> None:
 def _guard(fn, pid, *args):
     try:
         fn(pid, *args)
+    except kindle.KindleError as e:
+        store.update(pid, status='error', message=str(e))
     except EpubError as e:
         store.update(pid, status='error', message=f'无法作为 EPUB 读取：{e}')
     except Exception as e:  # noqa: BLE001  后台任务必须把错误落到状态里，否则前端会一直转圈
@@ -86,7 +88,22 @@ def _original_issues(pid: str, book: Book | None = None) -> dict:
     return _issues_report(issues, book, ws)
 
 
+def convert(pid: str) -> None:
+    """Kindle 原文件 → original.epub（只做一次；之后的体检、修复都以它为原件）。"""
+    meta = store.load_meta(pid)
+    if not meta.source_format or os.path.exists(store.path(pid, 'original.epub')):
+        return
+    store.update(pid, status='converting', message='')
+    with open(store.path(pid, f'source.{meta.source_format}'), 'rb') as f:
+        data = kindle.to_epub(f.read(), meta.source_format)
+    tmp = store.path(pid, 'original.epub.tmp')
+    with open(tmp, 'wb') as f:
+        f.write(data)
+    os.replace(tmp, store.path(pid, 'original.epub'))
+
+
 def audit(pid: str) -> None:
+    convert(pid)
     store.update(pid, status='auditing', message='')
     book = Book.load(store.path(pid, 'original.epub'))
     info = _book_info(book)

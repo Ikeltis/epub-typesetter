@@ -20,6 +20,14 @@ const previewOpen = ref(props.initialTab === 'preview' || localStorage.getItem('
 watch(previewOpen, (v) => localStorage.setItem('previewOpen', v ? '1' : '0'))
 // 当前标签页写进地址，刷新后停在原处
 watch(tab, (t) => { if (t) history.replaceState(null, '', `#/book/${props.id}/${t}`) })
+// 手动改地址栏（或前进后退）时跟着切换。直接听 hashchange：App 的路由只在 hashchange 时更新，
+// 切标签用的 replaceState 不触发它，App 里记的地址可能已过时，改回进入时的地址它会认为没变
+function onHash() {
+  const m = location.hash.match(/^#\/book\/([0-9a-f]{12})(?:\/([a-z]+))?$/)
+  if (!m || m[1] !== props.id) return
+  if (TABS.includes(m[2])) openTab(m[2])
+  else if (m[2] === 'preview') previewOpen.value = true
+}
 let timer
 
 const meta = computed(() => data.value?.meta)
@@ -100,12 +108,13 @@ const epcCount = (r) => (r?.available ? `${r.blocking} 个错误` : '未校验')
 const kb = (n) => n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.ceil(n / 1024)} KB`
 
 onMounted(async () => {
+  window.addEventListener('hashchange', onHash)
   load()
   try {
     rules.value = Object.fromEntries((await api.rules()).map((r) => [r.id, r]))
   } catch { /* 规则名只用于显示 */ }
 })
-onUnmounted(() => clearTimeout(timer))
+onUnmounted(() => { clearTimeout(timer); window.removeEventListener('hashchange', onHash) })
 </script>
 
 <template>
@@ -117,7 +126,7 @@ onUnmounted(() => clearTimeout(timer))
         <div class="tt">
           <div class="row"><h1 class="title" :title="meta.filename">{{ meta.title || meta.filename }}</h1><StatusBadge :status="meta.status" /></div>
           <div class="muted small info" :title="meta.filename">
-            {{ meta.author || '作者未知' }} · EPUB {{ meta.version || '?' }}<template v-if="audit"> · {{ audit.book.documents }} 个正文文件 · {{ kb(meta.size) }}</template>
+            {{ meta.author || '作者未知' }} · EPUB {{ meta.version || '?' }}<template v-if="meta.source_format">（由 {{ meta.source_format.toUpperCase() }} 转换）</template><template v-if="audit"> · {{ audit.book.documents }} 个正文文件 · {{ kb(meta.size) }}</template>
           </div>
         </div>
         <span class="spacer"></span>
@@ -138,7 +147,8 @@ onUnmounted(() => clearTimeout(timer))
       </div>
       <p v-if="busy" class="row status"><span class="spinner"></span>
         {{ meta.status === 'fixing' ? '正在修复并重新校验，较大的书需要几十秒…'
-          : meta.status === 'thinking' ? (meta.message || '大模型分析中…') : '正在体检（含 epubcheck 校验）…' }}</p>
+          : meta.status === 'thinking' ? (meta.message || '大模型分析中…')
+          : meta.status === 'converting' ? `正在把 ${meta.source_format.toUpperCase()} 转换为 EPUB…` : '正在体检（含 epubcheck 校验）…' }}</p>
       <p v-if="meta.status === 'error'" class="notice error status">{{ meta.message }}</p>
       <p v-else-if="!busy && meta.message" class="notice status">{{ meta.message }}</p>
     </header>
@@ -236,9 +246,11 @@ onUnmounted(() => clearTimeout(timer))
                 </td></tr>
               </template>
               <tr>
-                <td class="mono">原件</td><td class="muted">上传的原书，未改动</td><td></td><td></td>
+                <td class="mono">原件</td>
+                <td class="muted">{{ meta.source_format ? `上传的 ${meta.source_format.toUpperCase()}，转换为 EPUB，未做其他改动` : '上传的原书，未改动' }}</td><td></td><td></td>
                 <td class="act"><a href="#" class="small" @click.prevent="preview('original')">预览</a>
-                  <a class="btn" :href="api.downloadUrl(id, 'original')">下载</a></td>
+                  <a v-if="meta.source_format" class="small" :href="api.downloadUrl(id, 'source')">下载 {{ meta.source_format.toUpperCase() }}</a>
+                  <a class="btn" :href="api.downloadUrl(id, 'original')">下载{{ meta.source_format ? ' EPUB' : '' }}</a></td>
               </tr>
             </tbody></table>
           </div>

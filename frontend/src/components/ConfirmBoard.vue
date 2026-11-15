@@ -127,6 +127,12 @@ async function save() {
     emit('rebuild')
   } catch (e) { error.value = e.message } finally { saving.value = false }
 }
+// 顶栏的「按确认结果重新生成」也走这里：有没保存的改动时先存再重建
+// （dirty 按 JSON 原文比，键序不同也算改过，只适合控制按钮能不能点；这里按内容比）
+const KINDS = ['clusters', 'kinds', 'items', 'heads', 'matter', 'alts', 'titles', 'drop']
+const canon = (x) => JSON.stringify(KINDS.map((k) => Object.entries(x?.[k] || {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))))
+const unsaved = computed(() => !!data.value && canon(d.value) !== canon(data.value.decisions))
+defineExpose({ save, unsaved })
 function reset() { d.value = { clusters: {}, kinds: {}, items: {}, heads: {}, matter: {}, alts: {}, titles: {}, drop: {} } }
 
 // ---- 大模型 ----

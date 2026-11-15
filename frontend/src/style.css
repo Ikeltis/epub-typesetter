@@ -41,6 +41,7 @@ input, select, textarea { color: var(--text); }   /* 表单控件不继承文字
 .brand { font-weight: 700; font-size: 18px; text-decoration: none; color: var(--text); }
 .tagline { color: var(--muted); font-size: 14px; }
 .container { max-width: 1040px; margin: 0 auto; padding: 24px; }
+.container.wide { max-width: 1680px; padding-top: 0; }   /* 书的工作区：左导航 + 主区 + 右侧预览 */
 .card {
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 20px; margin-bottom: 20px;

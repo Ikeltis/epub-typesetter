@@ -4,11 +4,12 @@
 
 > **缮本**：「缮」是修补、誊写，「缮本」本是誊写清楚的本子，又与「善本」同音；日语里「本」就是书，所以也可读作「修书」。修补一本已有的书，得到一个好本子，正是这个软件做的事。
 
-把已有的 EPUB（主要是中文书）修成结构规范、排版讲究的 EPUB 3。带网页界面，规则引擎负责确定的事，大模型只给建议、由你确认。目标是任意符合 EPUB 3 规范的阅读系统，不绑定具体阅读器，不做格式转换。
+把已有的 EPUB（主要是中文书）修成结构规范、排版讲究的 EPUB 3。带网页界面，规则引擎负责确定的事，大模型只给建议、由你确认。目标是任意符合 EPUB 3 规范的阅读系统，不绑定具体阅读器。也能上传 Kindle 的 MOBI、AZW、AZW3，先转成 EPUB 再处理。
 
 ## 它能做什么
 
 - **体检**：用 EPUBCheck 和本工具的规则逐项检查原书，每条问题都带规则编号、修改提示、规范条目和命中位置。
+- **Kindle 格式**：MOBI、AZW、AZW3 上传后先转成 EPUB（用 KindleUnpack），之后和 EPUB 一样处理；上传的原文件另存、可下载。有 DRM 加密的书和 KFX 格式不支持，本工具不做解密。旧格式（MOBI 6）没有真正的标题标记，章标题常被认成「居中短行」，在确认板上把那组段落改成「章标题」即可。
 - **两种生成方式**
   - **仅规范修复**：只修规范错误和伪排版（空格缩进、空段、废弃标记、缺失的元数据与导航等），版面不动。
   - **排版重建**（推荐）：识别书的结构后按规范重排，套用统一主题。能识别的结构有：
@@ -80,7 +81,7 @@ SDK 暂时固定在 1.x：2.x 默认发送的 API 版本 2026-10-21 有些中转
 ## 处理流程
 
 ```
-上传 → 解析 → 体检（EPUBCheck + 规则）
+上传（Kindle 格式先转成 EPUB）→ 解析 → 体检（EPUBCheck + 规则）
           ├─ 仅规范修复：规则引擎的确定性修复 ─────────────────────────────┐
           └─ 排版重建：规范修复 → 语义分析 → 成组结构识别 → 按确认板的决定取舍  │
                        → 按章重建（标题、注释、插图、诗歌、书信、表格…）       │
@@ -142,10 +143,10 @@ SDK 暂时固定在 1.x：2.x 默认发送的 API 版本 2026-10-21 有些中转
 | `guide/` | 《EPUB 制作规范》 |
 | `src/epub_typesetter/` | 后端，各部分见下表 |
 | `frontend/` | 网页前端（Vue 3 + Vite）：书单、书的工作区（顶栏 + 左导航 + 右侧预览）、确认板、大模型设置 |
-| `tests/` | 测试（pytest，96 个，不联网） |
+| `tests/` | 测试（pytest，112 个，不联网） |
 | `scripts/` | 由规范生成主题与规则数据、样本验收、截图等辅助脚本 |
 | `Dockerfile`、`compose.yml`、`.env.example` | 交付镜像与运行配置 |
-| `docker/`、`compose.dev.yml` | 开发环境（Python 3.13、Java、EPUBCheck 5.4.0、chromium） |
+| `docker/`、`compose.dev.yml` | 开发环境（Python 3.13、Java、EPUBCheck 5.4.0、KindleUnpack、chromium） |
 | `docs/设计说明.md` | 设计说明：为什么这么设计（原则、按组确认、大模型任务）、路线、风险、决策记录 |
 
 后端 `src/epub_typesetter/` 各部分：
@@ -159,6 +160,7 @@ SDK 暂时固定在 1.x：2.x 默认发送的 API 版本 2026-10-21 有些中转
 | `board.py` | 确认板与用户决定 |
 | `rebuild.py`、`tables.py`、`nav.py` | 按章重建、表格规范化、导航 |
 | `pipeline.py` | 处理流程 |
+| `kindle.py` | Kindle 格式（MOBI、AZW、AZW3）转 EPUB：调用 KindleUnpack，旧格式自行打包 |
 | `textcheck.py`、`epubcheck.py`、`layoutcheck.py` | 文字比对、EPUBCheck、版面检查 |
 | `llm/` | 大模型：设置、调用与缓存、判断任务 |
 | `themes/` | 由规范生成的主题与按需模板 |
@@ -192,7 +194,7 @@ docker compose -f compose.dev.yml run --rm dev python -m epub_typesetter fix boo
 
 1. 目标阅读器：任意支持 EPUB 3 的阅读系统，不做厂商私有适配。
 2. 网页界面，独立软件，不和本地书库耦合。
-3. 只做「已有 EPUB → 更好的 EPUB」，不做格式转换。
+3. 只做「已有的书 → 更好的 EPUB」：Kindle 格式只为输入而转换，输出一律是 EPUB 3；不做 EPUB 到其他格式的转换。
 4. 大模型只做判断、不改写正文，结论经你确认后才落地。
 5. 正文一字不丢：删除的内容（书内目录页、广告页、注释区小标题、重复封面等）全部列在「重建详情」里。
 
@@ -201,4 +203,5 @@ docker compose -f compose.dev.yml run --rm dev python -m epub_typesetter fix boo
 - `guide/` 的知识来源包括：
   - 赤霓《EPub指南——从入门到放弃》（第 2 版），已按 EPUB 3.3 重新整理、更新和更正；原书版权归原作者，本仓库不包含原书内容副本。
   - Standard Ebooks《Manual of Style》（CC0）。`se lint`（GPLv3）只参考了规则意图，没有复制代码。
+- Kindle 格式的拆包用 [KindleUnpack](https://github.com/kevinhendricks/KindleUnpack)（PyPI 包 `mobi`，GPLv3）。它在镜像里单独安装、作为独立程序以命令行调用，不并入本项目代码。
 - 本项目以 [MIT 许可证](LICENSE) 发布。

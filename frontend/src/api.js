@@ -38,6 +38,7 @@ export const api = {
 
 export const STATUS = {
   queued: '排队中',
+  converting: '转换中',
   auditing: '体检中',
   ready: '已体检',
   fixing: '修复中',
@@ -46,4 +47,6 @@ export const STATUS = {
   error: '出错',
 }
 
-export const BUSY = new Set(['queued', 'auditing', 'fixing', 'thinking'])
+export const BUSY = new Set(['queued', 'converting', 'auditing', 'fixing', 'thinking'])
+// 能上传的格式：EPUB，以及 Kindle 的 MOBI / AZW / AZW3（后台先转成 EPUB）
+export const UPLOAD_EXTS = ['.epub', '.mobi', '.azw', '.azw3']

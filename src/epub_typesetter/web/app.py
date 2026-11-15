@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .. import __version__, board, engine, epubcheck, kindle
+from .. import __version__, board, engine, epubcheck, kindle, txtbook
 from ..llm.client import LLM, LLMError
 from ..llm.settings import LLMSettings
 from ..waivers import WaiverFileError, WaiverSet
@@ -63,10 +63,16 @@ async def upload(file: UploadFile):
             raise HTTPException(413, f'文件超过 {MAX_UPLOAD // 1024 // 1024} MB')
     data = bytes(data)
     fmt = ''
-    if not jobs.is_epub_like(data[:4]):
-        ext = kindle.ext_of(file.filename or '')
+    ext = kindle.ext_of(file.filename or '')
+    if not jobs.is_epub_like(data[:4]) and ext == 'txt' and not kindle.is_kindle(data):
+        try:
+            txtbook.decode(data[:65536])   # 二进制文件冒充 .txt 的直接拒绝
+        except txtbook.TxtError as e:
+            raise HTTPException(400, str(e)) from None
+        fmt = 'txt'
+    elif not jobs.is_epub_like(data[:4]):
         if ext not in kindle.KINDLE_EXTS and not kindle.is_kindle(data):
-            raise HTTPException(400, '只支持 EPUB，以及 Kindle 的 MOBI、AZW、AZW3 文件')
+            raise HTTPException(400, '只支持 EPUB、TXT，以及 Kindle 的 MOBI、AZW、AZW3 文件')
         try:
             kindle.check(data)             # 加密、KFX 等直接拒绝，不进后台
         except kindle.KindleError as e:
@@ -273,7 +279,7 @@ def view_file(pid: str, which: str, inner: str):
 
 @app.get('/api/books/{pid}/download')
 def download(pid: str, which: str = 'fixed'):
-    """which：original 原件（EPUB；Kindle 上传的是转换结果）、source 上传的 Kindle 原文件、
+    """which：original 原件（EPUB；Kindle、TXT 上传的是转换结果）、source 上传的原文件、
     fixed 最近一次生成、vN 第 N 版。"""
     import re as _re
     meta = _meta_or_404(pid)
@@ -288,10 +294,11 @@ def download(pid: str, which: str = 'fixed'):
     if not os.path.exists(p):
         raise HTTPException(404, '没有这份文件（旧版本只保留最近 5 份）')
     stem, ext = os.path.splitext(meta.filename)
-    if ext.lower().lstrip('.') not in ('epub', *kindle.KINDLE_EXTS):
+    if ext.lower().lstrip('.') not in ('epub', 'txt', *kindle.KINDLE_EXTS):
         stem = meta.filename
     if which == 'source':
-        name, mime = f'{stem}.{meta.source_format}', 'application/x-mobipocket-ebook'
+        name = f'{stem}.{meta.source_format}'
+        mime = 'text/plain; charset=utf-8' if meta.source_format == 'txt' else 'application/x-mobipocket-ebook'
     else:
         name = f'{stem}.epub' if which == 'original' else f'{stem}（优化{"" if which == "fixed" else "·" + which}）.epub'
         mime = 'application/epub+zip'

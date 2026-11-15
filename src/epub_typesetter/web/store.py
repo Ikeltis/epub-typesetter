@@ -1,8 +1,8 @@
 """项目存储：每本上传的书一个目录。
 
     {DATA_DIR}/{id}/meta.json      状态与基本信息
-                   original.epub   上传原件（永不修改）；上传的是 Kindle 格式时，是转换出的 EPUB
-                   source.<ext>    上传的 Kindle 原文件（mobi / azw / azw3，永不修改）
+                   original.epub   上传原件（永不修改）；上传的是 Kindle 格式或 TXT 时，是转换出的 EPUB
+                   source.<ext>    上传的 Kindle 或 TXT 原文件（mobi / azw / azw3 / txt，永不修改）
                    fixed.epub      最近一次生成的结果
                    versions/vN.epub、vN.json   每次生成各留一份（最近 5 份）与摘要
                    audit.json      体检报告
@@ -44,7 +44,7 @@ class Meta:
     title: str = ''
     author: str = ''
     version: str = ''
-    source_format: str = ''       # 上传的是 Kindle 格式时：mobi / azw / azw3（体检前先转成 original.epub）
+    source_format: str = ''       # 上传的是 Kindle 格式或 TXT 时：mobi / azw / azw3 / txt（体检前先转成 original.epub）
     updated: float = field(default_factory=time.time)
 
 

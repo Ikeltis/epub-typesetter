@@ -258,15 +258,14 @@ class Book:
 
     # ---------- manifest / spine ----------
 
+    def _item(self, el) -> ManifestItem:
+        href = el.get('href', '')
+        return ManifestItem(id=el.get('id', ''), href=href, path=self.resolve(self.opf_path, href),
+                            media_type=el.get('media-type', ''),
+                            properties=set((el.get('properties') or '').split()), element=el)
+
     def manifest(self) -> list[ManifestItem]:
-        items = []
-        for el in self.opf.iterfind('opf:manifest/opf:item', NS):
-            href = el.get('href', '')
-            items.append(ManifestItem(
-                id=el.get('id', ''), href=href, path=self.resolve(self.opf_path, href),
-                media_type=el.get('media-type', ''),
-                properties=set((el.get('properties') or '').split()), element=el))
-        return items
+        return [self._item(el) for el in self.opf.iterfind('opf:manifest/opf:item', NS)]
 
     def item_by_id(self, item_id: str) -> ManifestItem | None:
         return next((i for i in self.manifest() if i.id == item_id), None)
@@ -297,7 +296,8 @@ class Book:
         if data is not None:
             self.files[path] = data
         manifest = self.opf.find('opf:manifest', NS)
-        existing = {i.id for i in self.manifest()}
+        # 只取 id，不经 manifest() 逐条解析路径：重建时每章调一次，上千章的书上是平方级开销
+        existing = {el.get('id', '') for el in self.opf.iterfind('opf:manifest/opf:item', NS)}
         base = item_id or re.sub(r'[^A-Za-z0-9_.-]', '_', posixpath.basename(path)) or 'item'
         if not re.match(r'[A-Za-z_]', base):
             base = 'x' + base
@@ -312,7 +312,7 @@ class Book:
         if properties:
             el.set('properties', properties)
         self.mark_dirty(self.opf_path)
-        return self.item_by_id(new_id)
+        return self._item(el)
 
     # ---------- 保存 ----------
 

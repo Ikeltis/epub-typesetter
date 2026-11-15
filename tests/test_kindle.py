@@ -166,7 +166,7 @@ def test_upload_kindle_rejected(client, monkeypatch):
     monkeypatch.setattr(kindle, 'available', lambda: True)
     r = client.post('/api/books', files={'file': ('drm.azw', palmdb(2), 'application/octet-stream')})
     assert r.status_code == 400 and 'DRM' in r.json()['detail']
-    r = client.post('/api/books', files={'file': ('a.txt', b'hello' * 30, 'text/plain')})
+    r = client.post('/api/books', files={'file': ('a.pdf', b'%PDF-1.4' + b'hello' * 30, 'application/pdf')})
     assert r.status_code == 400
     monkeypatch.setattr(kindle, 'available', lambda: False)
     r = client.post('/api/books', files={'file': ('a.mobi', palmdb(0), 'application/octet-stream')})

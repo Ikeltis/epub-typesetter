@@ -10,7 +10,7 @@ from epub_typesetter.semantic import analyze
 from epub_typesetter.textcheck import compare_blocks
 from epub_typesetter.xhtml import X
 
-from conftest import JPEG, make_epub
+from conftest import JPEG, OPF2, XHTML11, make_epub
 
 EPUB_T = '{%s}type' % NS['epub']
 
@@ -221,3 +221,49 @@ def test_ordinal_and_title_headings_merged_and_toc_headings_dropped():
     assert h.get('id') == 'a1'                                       # 原锚点保留
     assert sum(1 for r, _ in rep.rebuild.removed if r == 'toc') == 3  # 目录页标题 + 两个链接型标题
     assert compare_blocks(rep.analysis.blocks, REMOVED_ROLES, out).ok
+
+
+OMNIBUS_T1 = XHTML11.format(title='1', body='<h1 title="Ⅰ 甲书"><img alt="t1" src="../Images/cover.jpg"/></h1>'
+                            '<h2><span>第1章</span><br/>开端</h2>'
+                            '<p><span style="float: left; font-size: 2em; font-weight: bold; color: #694776">甲</span>'
+                            '书开头。</p><h2>第2章 远行</h2><p>乙。</p>')
+OMNIBUS_T2 = ('<?xml version="1.0" encoding="utf-8"?>\n<html xmlns="http://www.w3.org/1999/xhtml"><head><title>2</title>'
+              '</head><body style="background: url(../Images/bg.jpg) no-repeat center">'
+              '<div class="img0"><h1 title="Ⅱ 乙书"><br/></h1></div></body></html>')
+OMNIBUS_T3 = XHTML11.format(title='3', body='<h2>第1章 归来</h2><p>丙。</p><h2>第2章 再会</h2><p>丁。</p>'
+                            '<h2>尾声</h2><p>戊。</p><h2>阿不思·邓布利多<br/>的序言</h2><p>己。</p>')
+OMNIBUS_T4 = XHTML11.format(title='4', body='<h1>Ⅲ 丙书</h1><h2>第1章 启程</h2><p>庚。</p><h2>第2章 终点</h2><p>辛。</p>'
+                            '<h1>附录</h1><h2>前传</h2><p>癸。</p><h2>小书</h2><h3>版权信息</h3><p>子。</p>'
+                            '<h1>制作手记</h1><p>壬。</p>')
+
+
+def test_omnibus_titles_in_title_attr_become_parts():
+    """合集：各册标题字只在 title 属性里（图片标题 / 背景图上的空标题），不叫「第X部」也要认作部；
+    背景整页图转成插图；目录文字里 <br/> 的处理。"""
+    opf = OPF2.replace('<item id="cover-img"', '<item id="c3" href="Text/c3.xhtml" media-type="application/xhtml+xml"/>'
+                       '<item id="c4" href="Text/c4.xhtml" media-type="application/xhtml+xml"/>'
+                       '<item id="bg" href="Images/bg.jpg" media-type="image/jpeg"/><item id="cover-img"')
+    opf = opf.replace('<itemref idref="c2"/>', '<itemref idref="c2"/><itemref idref="c3"/><itemref idref="c4"/>')
+    b = Book.load(make_epub({'OEBPS/content.opf': opf, 'OEBPS/Images/bg.jpg': JPEG,
+                             'OEBPS/Text/c1.xhtml': OMNIBUS_T1, 'OEBPS/Text/c2.xhtml': OMNIBUS_T2,
+                             'OEBPS/Text/c3.xhtml': OMNIBUS_T3, 'OEBPS/Text/c4.xhtml': OMNIBUS_T4}))
+    rep = optimize(b)
+    out = Book.load(b.to_bytes())
+    assert compare_blocks(rep.analysis.blocks, REMOVED_ROLES, out).ok
+    nav = next(i for i in out.manifest() if 'nav' in i.properties)
+    toc = out.tree(nav.path).getroot().find(f".//{X}nav[@{EPUB_T}='toc']")
+    top = toc.find(f'{X}ol').findall(f'{X}li')
+    assert [li.find(f'{X}a').text for li in top] == ['Ⅰ 甲书', 'Ⅱ 乙书', 'Ⅲ 丙书', '附录', '制作手记']
+    assert [a.text for a in top[0].iter(X + 'a')][1:] == ['第1章　开端', '第2章　远行']
+    assert [a.text for a in top[1].iter(X + 'a')][1:] == ['第1章　归来', '第2章　再会', '尾声',
+                                                          '阿不思·邓布利多的序言']   # 尾声留在本册里
+    # 附录下面不是「第X章」：附录不算部，作章，子项作节嵌在下面
+    assert [a.text for a in top[3].iter(X + 'a')][1:] == ['前传', '小书']
+    xs = {p: out.files[p].decode() for p in out.files if p.endswith('.xhtml')}
+    assert sum(s.count('class="part-title"') for s in xs.values()) == 3
+    assert any('<h2 class="chapter-title"' in s and '>附录</h2>' in s for s in xs.values())
+    # 首字下沉：放大、浮动去掉后，颜色、加粗也不留
+    assert any('<p>甲书开头。</p>' in s for s in xs.values())
+    assert any('alt="Ⅰ 甲书"' in s for s in xs.values())                    # 图片标题：文字进 alt，图照常显示
+    assert any('>Ⅱ 乙书</h2>' in s for s in xs.values())                     # 空标题：直接输出文字
+    assert any('bg.jpg' in s for s in xs.values()) and 'OEBPS/Images/bg.jpg' in out.files   # 背景整页图没丢

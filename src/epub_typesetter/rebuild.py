@@ -141,6 +141,54 @@ def _clean_ws(s: str) -> str:
     return re.sub(r'[ \t]*\n[\s]*', SOFT, s)
 
 
+_BR = object()
+_ORDINAL_END = re.compile(r'(第[一二三四五六七八九十百千零〇两\d]+[章回节卷部篇编集幕场折]|chapter\s*[\divxlc]+)\s*$', re.I)
+_CJK = re.compile(r'[　-〿㐀-鿿＀-￯]')
+
+
+def _nav_label(h: etree._Element) -> str:
+    """目录条目文字。标题里的 <br/>：章号之后换行（「第一章<br/>飞天扫帚的演变」）补一个全角空格，
+    中文长标题的折行（「阿不思·邓布利多<br/>的序言」）直接接上，西文之间补空格。
+    标题只有图片时用图片的 alt。"""
+    out = ''
+    pieces = list(_iter_text_br(h))
+    for k, p in enumerate(pieces):
+        if p is not _BR:
+            out += p
+            continue
+        before = out.rstrip()
+        nxt = next((x for x in pieces[k + 1:] if x is not _BR and x.strip()), '')
+        after = nxt.lstrip()
+        if not before or not after:
+            continue
+        if _ORDINAL_END.search(before):
+            out = before + '　'                    # 章号与章名之间一个全角空格（04 §4.3）
+        elif before != out or after != nxt:        # 源码在换行旁本来就空了一格（「尾声 <br/>十九年后」）
+            out = before + ' '
+        elif not (_CJK.match(before[-1]) and _CJK.match(after[0])):
+            out = before + ' '
+        else:
+            out = before
+    label = re.sub(r'[ \t\r\n]*　[ \t\r\n]*', '　', squash(out))   # 换行后源码的缩进空白不跟在全角空格旁
+    if not label:
+        label = next((squash(i.get('alt') or '') for i in h.iter(X + 'img') if (i.get('alt') or '').strip()), '')
+    return label
+
+
+def _iter_text_br(el: etree._Element):
+    """同 itertext()，但 <br/> 处产出 _BR 标记。"""
+    if el.text:
+        yield el.text
+    for c in el:
+        if isinstance(c.tag, str):
+            if c.tag == X + 'br':
+                yield _BR
+            else:
+                yield from _iter_text_br(c)
+        if c.tail:
+            yield c.tail
+
+
 def _resolve_soft(dst: etree._Element) -> None:
     """SOFT 两侧（跨标签看）有汉字或全角标点就删掉，两侧都是西文才变一个空格。"""
     order = []
@@ -237,9 +285,47 @@ class Rebuilder:
                 chapter_level += 1
         part_level = chapter_level - 1 if chapter_level > 1 and any(
             h.level == chapter_level - 1 and PART_RE.match(h.text) for h in heads) else None
+        # 不叫「第X部/卷」的部：合集里的各册（「Ⅰ 哈利·波特与魔法石」，标题里没有「第X部」）。
+        # 章的上一级标题里，至少两个各自管着不止一个「第X章/回」，就按结构认作部；
+        # 部的范围（到下一个同级标题为止）里的尾声、后记等也归这一部，不再跳出来与部并列。
+        # 同一级里管着别的标题、但不是「第X章」的（剧本的「第一幕」、附录下的几本小书）：
+        # 不算部，本身作章，下面的标题降一级作节，仍嵌在它下面
+        struct_part: dict[int, int] = {}          # 部标题块序号 → 范围终点（下一个同级或更高标题的块序号）
+        struct_chap: dict[int, int] = {}          # 作章的容器标题 → 范围终点
+        if chapter_level > 1:
+            up = chapter_level - 1
+            for k, h in enumerate(heads):
+                if h.level != up or h.attrs.get('force') or PART_RE.match(h.text):
+                    continue
+                end = next((x for x in heads[k + 1:] if x.level <= up), None)
+                inner = heads[k + 1:heads.index(end) if end is not None else len(heads)]
+                stop = end.idx if end is not None else len(self.an.blocks)
+                if sum(1 for x in inner if x.level == chapter_level and CHAPTER_ONLY_RE.match(x.text)) >= 2:
+                    struct_part[h.idx] = stop
+                elif any(x.level == chapter_level for x in inner):
+                    struct_chap[h.idx] = stop
+            if len(struct_part) < 2:
+                struct_part, struct_chap = {}, {}
+        part_end = -1
+        chap_end = -1                             # 在作章的容器范围里：其下标题降一级
         in_part = False
         cur_n = 2
         for h in heads:
+            if in_part and part_end >= 0 and h.idx >= part_end:   # 出了结构部的范围
+                in_part, part_end = False, -1
+            if chap_end >= 0 and h.idx >= chap_end:
+                chap_end = -1
+            if h.idx in struct_chap:
+                in_part, part_end, cur_n = False, -1, 2
+                self.head_out[h.idx] = (2, 'chapter-title', 'chapter')
+                chap_end = struct_chap[h.idx]
+                continue
+            if chap_end >= 0 and not h.attrs.get('force'):
+                depth = h.level - chapter_level + 1
+                cls = {1: 'section-title', 2: 'subsection-title'}.get(depth)
+                # 直接下级仍单独成文件（附录里的整本百科全书、剧本各幕都很长），只是层级是节
+                self.head_out[h.idx] = (min(2 + depth, 6), cls, 'chapter' if depth == 1 else 'sub')
+                continue
             force = h.attrs.get('force')                # 确认板上用户指定的部、章、节
             if force == 'part':
                 self.head_out[h.idx] = (2, 'part-title', 'part')
@@ -253,11 +339,14 @@ class Rebuilder:
                 self.head_out[h.idx] = (min(cur_n + 1, 6), 'section-title', 'sub')
             elif part_level is not None and h.level == part_level and PART_RE.match(h.text):
                 self.head_out[h.idx] = (2, 'part-title', 'part')
-                in_part, cur_n = True, 2
+                in_part, cur_n, part_end = True, 2, -1
+            elif h.idx in struct_part:
+                self.head_out[h.idx] = (2, 'part-title', 'part')
+                in_part, cur_n, part_end = True, 2, struct_part[h.idx]
             elif h.level <= chapter_level:
                 special = any(rx.match(h.text) for rx, t, _ in TYPE_BY_TITLE)   # 前言、后记等不属于部
-                if special:
-                    in_part = False
+                if special and part_end < 0 or h.level < chapter_level:
+                    in_part, part_end = False, -1
                 cur_n = 3 if in_part else 2
                 self.head_out[h.idx] = (cur_n, 'chapter-title', 'chapter')
             else:
@@ -478,6 +567,11 @@ class Rebuilder:
         st = _style_of(el, self.classes)
         cls = []
         size = _size_level(st.get('font-size', ''))
+        # 首字下沉（.first{float:left; font-size:2em; 黑体; 加粗; 色}）：放大和浮动重建不保留，
+        # 剩下的字体、颜色、加粗只落在段首一个字上，像排错了——整组都是装饰，按正文字输出
+        if st.get('float', '').strip() in ('left', 'right') and size is not None and size > 3 \
+                and len(squash(''.join(el.itertext()))) <= 2:
+            return [], False, False
         if size is not None and size < 3:
             cls.append('small')
         ff = st.get('font-family', '')
@@ -650,6 +744,18 @@ class Rebuilder:
             anchors[-1].tail = b.attrs['title']
         else:
             e.text = b.attrs['title']
+
+    @staticmethod
+    def _title_from_attr(e: etree._Element, title: str) -> None:
+        """原标题的字只在 title 属性里：标题是图片（书名画在图上）就把文字写进图片 alt，
+        图片照常显示，读屏和目录都能读到；没有图片（字画在背景图上）就直接输出文字。"""
+        img = next((x for x in e.iter(X + 'img')), None)
+        if img is not None:
+            img.set('alt', title)
+            return
+        for br in list(e.iter(X + 'br')):        # <h2 title="书名"><br/></h2> 里只剩换行
+            br.getparent().remove(br)
+        e.text = title
 
     def _only_noteref(self, el) -> bool:
         """el 不是注号本身，但里面有注号，且除注号文字外没有别的文字。"""
@@ -862,6 +968,8 @@ class Rebuilder:
                 self.inline(b.el, e, plain=b.role == 'heading', sized=b.role in ('caption', 'source'))
                 if b.role == 'heading' and e.text:            # 章号与章名之间统一为一个全角空格（04 §4.3）
                     e.text = ORDINAL_SEP_RE.sub('\\1\u3000', e.text, count=1)
+            if b.role == 'heading' and b.attrs.get('src_title') and not ''.join(e.itertext()).strip():
+                self._title_from_attr(e, b.attrs['src_title'])
             self._anchors(b, e)
             sec.append(e)
             i += 1
@@ -1288,7 +1396,7 @@ class Rebuilder:
             heads = [h for h in html.iter(X + 'h2', X + 'h3', X + 'h4')
                      if set((h.get('class') or '').split()) & {'part-title', 'chapter-title', 'section-title'}]
             for k, h in enumerate(heads):
-                entries.append(Entry(int(h.tag[-1]) - 1, squash(''.join(h.itertext())), ch.path,
+                entries.append(Entry(int(h.tag[-1]) - 1, _nav_label(h), ch.path,
                                      '' if k == 0 else h.get('id')))
         chapters = [ch for ch, _ in trees]
         if not entries and chapters:                  # 全书没有标题：至少给一条指向正文开头

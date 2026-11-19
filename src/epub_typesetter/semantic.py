@@ -29,7 +29,7 @@ from lxml import etree
 
 from .book import NS, Book
 from .nav import entries_from_ncx
-from .xhtml import X, css_paths, is_external, squash
+from .xhtml import HEADINGS, X, css_paths, is_external, squash
 
 BLOCK_TAGS = {X + t for t in ('p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'li', 'dt', 'dd', 'div',
                               'figcaption', 'pre', 'table', 'figure', 'section', 'article', 'aside',
@@ -221,6 +221,26 @@ def _indent_of(book: Book, el) -> float:
     return indent_width(m.group(1)) if m else book.removed_indent.get(el, 0)
 
 
+_BG_URL = re.compile(r'background(?:-image)?\s*:[^;]*?url\(\s*["\']?([^"\')]+)["\']?\s*\)', re.I)
+_BG_MAX_TEXT = 40          # 背景上的字不超过一行标题，才算「整页图」（扉页、分册封面）
+
+
+def _background_as_img(book: Book, doc: str, body) -> None:
+    """整页图常写成 body/div 的内联背景图（<body style="background: url(cover.jpg)">），
+    重建不保留内联样式，图会整张丢掉。页面上几乎没有文字时，在页末补一个 <img>，按普通插图输出。
+    只认内联样式：样式表里的背景多是纹理、花边，不是内容。（只在重建前调用，改的树随后整体重写。）"""
+    for el in [body] + [d for d in body.iter(X + 'div')]:
+        m = _BG_URL.search(el.get('style') or '')
+        if not m or len(squash(''.join(body.itertext()))) > _BG_MAX_TEXT:
+            continue
+        href = m.group(1).strip()
+        if is_external(href) or Book.resolve(doc, href) not in book.files:
+            continue
+        if any(Book.resolve(doc, i.get('src') or '') == Book.resolve(doc, href) for i in body.iter(X + 'img')):
+            continue
+        etree.SubElement(body, X + 'img', {'src': href, 'alt': ''})
+
+
 def extract_blocks(book: Book) -> list[Block]:
     classes = class_styles(book)
     blocks: list[Block] = []
@@ -231,6 +251,7 @@ def extract_blocks(book: Book) -> list[Block]:
         body = root.find(X + 'body')
         if body is None:
             continue
+        _background_as_img(book, it.path, body)
         # 链接可能指向文件本身（body/html 上的 id），它们归属文件的第一块
         pending: list[str] = [x for x in (root.get('id'), body.get('id')) if x]
         gap = [False]
@@ -247,12 +268,21 @@ def extract_blocks(book: Book) -> list[Block]:
                     size, bold, align = _visual(ch, classes)
                     has_media = any(isinstance(d.tag, str) and _local(d.tag) in ('img', 'svg', 'image')
                                     for d in ch.iter())
+                    # 标题文字只写在 title 属性里（<h1 title="Ⅰ 书名"><img/></h1>、<h2 title="书名"><br/></h2>，
+                    # 字画在图片或背景图上）：取 title 作标题文字，否则目录条目为空、甚至整个标题丢失
+                    src_title = squash(ch.get('title') or '') if not text and ch.tag in HEADINGS else ''
+                    if src_title:
+                        text = src_title
                     if not text and not has_media and ch.tag not in ATOMIC:
                         pending.extend(ids)       # 空块（如 <p id=x/>）当锚点用
                         gap[0] = True
                         continue
                     blocks.append(Block(len(blocks), it.path, ch, text, pending + ids, size, bold, align,
                                         indent=_indent_of(book, ch), gap_before=gap[0]))
+                    if src_title:
+                        blocks[-1].attrs['src_title'] = src_title
+                        if has_media:            # 重建时文字写进图片 alt，正文里看不到：不按文字核对
+                            blocks[-1].verify = ''
                     pending.clear()
                     gap[0] = False
                 elif _is_block(ch):

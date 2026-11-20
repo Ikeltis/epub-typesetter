@@ -502,6 +502,9 @@ def analyze(book: Book, decisions: dict | None = None) -> Analysis:
             continue
         if in_toc and (_link_only(b.el) or not b.text):
             b.role, b.reason = 'toc', '目录页条目'
+        elif in_toc and len(b.text) <= 20 and (nxt := next((x for x in blocks[b.idx + 1:] if x.text), None)) \
+                is not None and nxt.role != 'heading' and _link_only(nxt.el):
+            b.role, b.reason = 'toc', '目录页里的分组行'     # 「第一部」+ 装饰图，后面接着还是目录条目
         else:
             in_toc = False
 

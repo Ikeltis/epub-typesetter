@@ -1,3 +1,4 @@
+import re
 import shutil
 
 import pytest
@@ -267,3 +268,22 @@ def test_omnibus_titles_in_title_attr_become_parts():
     assert any('alt="Ⅰ 甲书"' in s for s in xs.values())                    # 图片标题：文字进 alt，图照常显示
     assert any('>Ⅱ 乙书</h2>' in s for s in xs.values())                     # 空标题：直接输出文字
     assert any('bg.jpg' in s for s in xs.values()) and 'OEBPS/Images/bg.jpg' in out.files   # 背景整页图没丢
+
+
+def test_visible_toc_with_group_rows_removed():
+    """书内目录页里夹着「第一部」+ 装饰图这样的分组行：整页都要删掉，成品里不留看得见的目录。"""
+    toc_page = XHTML11.format(title='目录', body=(
+        '<h1>目录</h1><p class="c">第一部<br/><img src="../Images/cover.jpg" alt=""/><br/>'
+        '<a href="c2.xhtml">甲书</a></p><p><a href="c2.xhtml#a1">第1章 开端</a></p>'
+        '<p><a href="c2.xhtml#a2">第2章 远行</a></p><div><img src="../Images/cover.jpg" alt=""/></div>'
+        '<p class="c">第二部</p><p><a href="c2.xhtml#a3">第3章 归来</a></p>'))
+    body = XHTML11.format(title='正文', body='<h1 id="a1">第1章 开端</h1><p>甲。</p><h1 id="a2">第2章 远行</h1>'
+                                             '<p>乙。</p><h1 id="a3">第3章 归来</h1><p>丙。</p>')
+    b = Book.load(make_epub({'OEBPS/Text/c1.xhtml': toc_page, 'OEBPS/Text/c2.xhtml': body}))
+    rep = optimize(b)
+    out = Book.load(b.to_bytes())
+    assert compare_blocks(rep.analysis.blocks, REMOVED_ROLES, out).ok
+    text = ''.join(out.files[p].decode() for p in out.files if p.endswith('.xhtml') and 'nav' not in p)
+    assert '第一部' not in text and '第二部' not in text and '>目录<' not in text
+    bodies = ''.join(re.findall(r'<body.*?</body>', text, re.S))
+    assert bodies.count('第1章') == 1                  # 只剩正文里的章标题（<title> 里的不算）

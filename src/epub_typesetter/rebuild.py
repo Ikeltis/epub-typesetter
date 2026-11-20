@@ -306,27 +306,39 @@ class Rebuilder:
                     struct_chap[h.idx] = stop
             if len(struct_part) < 2:
                 struct_part, struct_chap = {}, {}
+        def span_end(k: int, lv: int) -> int:
+            """heads[k] 的范围终点：下一个原层级不低于 lv 的标题。"""
+            nxt = next((x for x in heads[k + 1:] if x.attrs.get('level0', x.level) <= lv), None)
+            return nxt.idx if nxt is not None else len(self.an.blocks)
+
         part_end = -1
         chap_end = -1                             # 在作章的容器范围里：其下标题降一级
+        chap_lv, chap_n = 0, 2                    # 容器的原层级、输出的 h 数字
         in_part = False
         cur_n = 2
-        for h in heads:
+        for k, h in enumerate(heads):
+            force = h.attrs.get('force')                # 确认板上用户指定的部、章、节
+            lv0 = h.attrs.get('level0', h.level)
+            # 用户把与部同级的标题（合集里的第八册）指定为章：并进前一部，原来管着的标题随它降一级
+            container = force == 'chapter' and lv0 < chapter_level
             if in_part and part_end >= 0 and h.idx >= part_end:   # 出了结构部的范围
-                in_part, part_end = False, -1
+                if container:
+                    part_end = -1
+                else:
+                    in_part, part_end = False, -1
             if chap_end >= 0 and h.idx >= chap_end:
                 chap_end = -1
             if h.idx in struct_chap:
                 in_part, part_end, cur_n = False, -1, 2
                 self.head_out[h.idx] = (2, 'chapter-title', 'chapter')
-                chap_end = struct_chap[h.idx]
+                chap_end, chap_lv, chap_n = struct_chap[h.idx], chapter_level - 1, 2
                 continue
-            if chap_end >= 0 and not h.attrs.get('force'):
-                depth = h.level - chapter_level + 1
+            if chap_end >= 0 and not force:
+                depth = h.level - chap_lv
                 cls = {1: 'section-title', 2: 'subsection-title'}.get(depth)
                 # 直接下级仍单独成文件（附录里的整本百科全书、剧本各幕都很长），只是层级是节
-                self.head_out[h.idx] = (min(2 + depth, 6), cls, 'chapter' if depth == 1 else 'sub')
+                self.head_out[h.idx] = (min(chap_n + depth, 6), cls, 'chapter' if depth == 1 else 'sub')
                 continue
-            force = h.attrs.get('force')                # 确认板上用户指定的部、章、节
             if force == 'part':
                 self.head_out[h.idx] = (2, 'part-title', 'part')
                 in_part, cur_n = True, 2
@@ -335,6 +347,8 @@ class Rebuilder:
             elif force == 'chapter':
                 cur_n = 3 if in_part else 2
                 self.head_out[h.idx] = (cur_n, 'chapter-title', 'chapter')
+                if container:
+                    chap_end, chap_lv, chap_n = span_end(k, lv0), lv0, cur_n
             elif force == 'section':
                 self.head_out[h.idx] = (min(cur_n + 1, 6), 'section-title', 'sub')
             elif part_level is not None and h.level == part_level and PART_RE.match(h.text):
@@ -951,7 +965,11 @@ class Rebuilder:
             else:
                 cls = {'source': 'source', 'meta': 'meta', 'right': 'align-right', 'center': 'align-center'}
                 e = _el('p', {'class': cls.get(b.role)})
-            if b.role == 'heading' and b.attrs.get('title'):   # 确认板上改写的标题
+            if b.role == 'heading' and b.attrs.get('title') and b.attrs.get('src_title') \
+                    and b.el.find('.//' + X + 'img') is not None:  # 改写图片标题：图保留，新文字进 alt
+                self.inline(b.el, e, plain=True)
+                self._title_from_attr(e, b.attrs['title'])
+            elif b.role == 'heading' and b.attrs.get('title'):   # 确认板上改写的标题
                 self._retitle(b, e)
             elif b.role == 'heading' and b.merged >= 0:     # 章号与章名两个标题合并：「第一回　章名」
                 other = self.an.blocks[b.merged]
@@ -969,7 +987,7 @@ class Rebuilder:
                 if b.role == 'heading' and e.text:            # 章号与章名之间统一为一个全角空格（04 §4.3）
                     e.text = ORDINAL_SEP_RE.sub('\\1\u3000', e.text, count=1)
             if b.role == 'heading' and b.attrs.get('src_title') and not ''.join(e.itertext()).strip():
-                self._title_from_attr(e, b.attrs['src_title'])
+                self._title_from_attr(e, b.attrs.get('title') or b.attrs['src_title'])
             self._anchors(b, e)
             sec.append(e)
             i += 1

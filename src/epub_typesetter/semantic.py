@@ -406,6 +406,8 @@ def apply_block_roles(blocks: list[Block], heads: dict[str, str], matter: dict[s
         k = keys[b.idx]
         role = heads.get(k)
         if role in ('part', 'chapter', 'section', 'subsection') and b.role in REASSIGNABLE + ('heading',):
+            if b.role == 'heading':
+                b.attrs['level0'] = b.level          # 原层级：降级的标题带着它下面的标题一起降（rebuild）
             b.role, b.level, b.attrs['force'] = 'heading', {'part': 1, 'chapter': 1}.get(role, 2), role
             b.reason = f'用户确认：{role}'
         elif role == 'para' and b.role == 'heading':
@@ -437,7 +439,8 @@ def apply_titles(blocks: list[Block], titles: dict[str, str]) -> None:
         if not t or b.role != 'heading':
             continue
         b.attrs['title'] = t
-        b.verify = t
+        # 标题是图片、字只在 title 属性里：新文字写进图片 alt（图照常显示），正文里看不到，不按文字核对
+        b.verify = '' if b.attrs.get('src_title') and b.el.find('.//' + X + 'img') is not None else t
         if b.merged >= 0:                     # 并入的章号（或章名）块已含在新文字里
             blocks[b.merged].verify = ''
 

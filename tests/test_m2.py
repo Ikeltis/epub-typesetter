@@ -238,22 +238,30 @@ OMNIBUS_T4 = XHTML11.format(title='4', body='<h1>Ⅲ 丙书</h1><h2>第1章 启�
                             '<h1>制作手记</h1><p>壬。</p>')
 
 
-def test_omnibus_titles_in_title_attr_become_parts():
-    """合集：各册标题字只在 title 属性里（图片标题 / 背景图上的空标题），不叫「第X部」也要认作部；
-    背景整页图转成插图；目录文字里 <br/> 的处理。"""
+def _omnibus() -> bytes:
     opf = OPF2.replace('<item id="cover-img"', '<item id="c3" href="Text/c3.xhtml" media-type="application/xhtml+xml"/>'
                        '<item id="c4" href="Text/c4.xhtml" media-type="application/xhtml+xml"/>'
                        '<item id="bg" href="Images/bg.jpg" media-type="image/jpeg"/><item id="cover-img"')
     opf = opf.replace('<itemref idref="c2"/>', '<itemref idref="c2"/><itemref idref="c3"/><itemref idref="c4"/>')
-    b = Book.load(make_epub({'OEBPS/content.opf': opf, 'OEBPS/Images/bg.jpg': JPEG,
-                             'OEBPS/Text/c1.xhtml': OMNIBUS_T1, 'OEBPS/Text/c2.xhtml': OMNIBUS_T2,
-                             'OEBPS/Text/c3.xhtml': OMNIBUS_T3, 'OEBPS/Text/c4.xhtml': OMNIBUS_T4}))
+    return make_epub({'OEBPS/content.opf': opf, 'OEBPS/Images/bg.jpg': JPEG,
+                      'OEBPS/Text/c1.xhtml': OMNIBUS_T1, 'OEBPS/Text/c2.xhtml': OMNIBUS_T2,
+                      'OEBPS/Text/c3.xhtml': OMNIBUS_T3, 'OEBPS/Text/c4.xhtml': OMNIBUS_T4})
+
+
+def _nav_top(out: Book) -> list:
+    nav = next(i for i in out.manifest() if 'nav' in i.properties)
+    toc = out.tree(nav.path).getroot().find(f".//{X}nav[@{EPUB_T}='toc']")
+    return toc.find(f'{X}ol').findall(f'{X}li')
+
+
+def test_omnibus_titles_in_title_attr_become_parts():
+    """合集：各册标题字只在 title 属性里（图片标题 / 背景图上的空标题），不叫「第X部」也要认作部；
+    背景整页图转成插图；目录文字里 <br/> 的处理。"""
+    b = Book.load(_omnibus())
     rep = optimize(b)
     out = Book.load(b.to_bytes())
     assert compare_blocks(rep.analysis.blocks, REMOVED_ROLES, out).ok
-    nav = next(i for i in out.manifest() if 'nav' in i.properties)
-    toc = out.tree(nav.path).getroot().find(f".//{X}nav[@{EPUB_T}='toc']")
-    top = toc.find(f'{X}ol').findall(f'{X}li')
+    top = _nav_top(out)
     assert [li.find(f'{X}a').text for li in top] == ['Ⅰ 甲书', 'Ⅱ 乙书', 'Ⅲ 丙书', '附录', '制作手记']
     assert [a.text for a in top[0].iter(X + 'a')][1:] == ['第1章　开端', '第2章　远行']
     assert [a.text for a in top[1].iter(X + 'a')][1:] == ['第1章　归来', '第2章　再会', '尾声',
@@ -268,6 +276,33 @@ def test_omnibus_titles_in_title_attr_become_parts():
     assert any('alt="Ⅰ 甲书"' in s for s in xs.values())                    # 图片标题：文字进 alt，图照常显示
     assert any('>Ⅱ 乙书</h2>' in s for s in xs.values())                     # 空标题：直接输出文字
     assert any('bg.jpg' in s for s in xs.values()) and 'OEBPS/Images/bg.jpg' in out.files   # 背景整页图没丢
+
+
+def test_omnibus_volume_forced_to_chapter_and_image_title_renamed():
+    """确认板：把一册（与部同级）指定为章 → 并进前一部，原来的各章随它降为节；
+    改写图片标题的文字 → 图片保留，新文字进 alt 和目录。"""
+    from epub_typesetter import board
+    from epub_typesetter.semantic import block_keys
+    an = analyze(Book.load(_omnibus()))
+    keys = block_keys(an.blocks)
+    key = {b.text: keys[b.idx] for b in an.blocks if b.role == 'heading'}
+    d = board.empty()
+    d['heads'][key['Ⅱ 乙书']] = 'chapter'
+    d['titles'][key['Ⅰ 甲书']] = '甲书'
+    b = Book.load(_omnibus())
+    rep = optimize(b, decisions=d)
+    out = Book.load(b.to_bytes())
+    assert compare_blocks(rep.analysis.blocks, REMOVED_ROLES, out).ok
+    top = _nav_top(out)
+    assert [li.find(f'{X}a').text for li in top] == ['甲书', 'Ⅲ 丙书', '附录', '制作手记']
+    first = [li.find(f'{X}a').text for li in top[0].find(f'{X}ol').findall(f'{X}li')]
+    assert first == ['第1章　开端', '第2章　远行', 'Ⅱ 乙书']           # 乙书在甲书这一部里
+    vol2 = top[0].find(f'{X}ol').findall(f'{X}li')[2]
+    assert [li.find(f'{X}a').text for li in vol2.find(f'{X}ol').findall(f'{X}li')][:3] == \
+        ['第1章　归来', '第2章　再会', '尾声']                            # 原来的章降为节，嵌在乙书下
+    xs = ''.join(out.files[p].decode() for p in out.files if p.endswith('.xhtml'))
+    assert 'alt="甲书"' in xs and 'Ⅰ' not in xs.replace('alt="Ⅰ', '')    # 图片还在，文字改了
+    assert '<h3 class="chapter-title"' in xs and '>Ⅱ 乙书</h3>' in xs
 
 
 def test_visible_toc_with_group_rows_removed():

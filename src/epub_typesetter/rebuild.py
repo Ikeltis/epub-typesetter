@@ -176,13 +176,15 @@ def _nav_label(h: etree._Element) -> str:
 
 
 def _iter_text_br(el: etree._Element):
-    """同 itertext()，但 <br/> 处产出 _BR 标记。"""
+    """同 itertext()，但 <br/> 处产出 _BR 标记；注号（a.noteref）的编号不算标题文字。"""
     if el.text:
         yield el.text
     for c in el:
         if isinstance(c.tag, str):
             if c.tag == X + 'br':
                 yield _BR
+            elif 'noteref' in (c.get('class') or '').split():
+                pass
             else:
                 yield from _iter_text_br(c)
         if c.tail:
@@ -195,6 +197,30 @@ def _drop_keep_tail(node: etree._Element) -> None:
     prev = node.getprevious()
     if node.tail:
         if prev is not None:
+            prev.tail = (prev.tail or '') + node.tail
+        else:
+            parent.text = (parent.text or '') + node.tail
+    parent.remove(node)
+
+
+def _unwrap(node: etree._Element) -> None:
+    """拆掉元素外壳，里面的文字和子元素留在原处。"""
+    parent = node.getparent()
+    idx = list(parent).index(node)
+    prev = node.getprevious()
+    if node.text:
+        if prev is not None:
+            prev.tail = (prev.tail or '') + node.text
+        else:
+            parent.text = (parent.text or '') + node.text
+    kids = list(node)
+    for k, c in enumerate(kids):
+        parent.insert(idx + k, c)
+    last = kids[-1] if kids else None
+    if node.tail:
+        if last is not None:
+            last.tail = (last.tail or '') + node.tail
+        elif prev is not None:
             prev.tail = (prev.tail or '') + node.tail
         else:
             parent.text = (parent.text or '') + node.tail
@@ -671,6 +697,8 @@ class Rebuilder:
         """把 src 的行内内容（不含 src 自身标签）规范化后追加进 dst。
         plain=True：去掉一切行内样式（标题）；sized=True：字号由块的角色样式决定，不再输出 small（图注、出处、注文）。"""
         state = {'strip': strip_prefix}
+        # 图片字只在有文字的块里才成立；整块只有图（只含一张手写批注图的注释）时按原大小显示
+        has_text = bool(''.join(src.itertext()).strip())
 
         def add_text(parent, text):
             text = _clean_ws(text)
@@ -719,7 +747,7 @@ class Rebuilder:
             if ch.get('id') and not (tag in KEEP_INLINE and tag != 'span'):
                 d.append(_el('span', {'id': ch.get('id')}))
             if tag in ('img', 'svg'):
-                glyph = tag == 'img' and self._is_glyph(ch)
+                glyph = tag == 'img' and has_text and self._is_glyph(ch)
                 e = copy.deepcopy(ch)
                 e.tail = None                  # deepcopy 会带上 tail；tail 由外层 walk 统一追加，否则文字重复
                 _clean_media(e)
@@ -1351,6 +1379,13 @@ class Rebuilder:
             li = etree.SubElement(ol, X + 'li', {'id': f'note-{num}'})
             p = etree.SubElement(li, X + 'p')
             body_src = copy.deepcopy(b.el)
+            # 注文整段包在指回原注号的链接里（<p id="fn1"><a href="#n1">注文</a></p>，注号是图片的书常见）：
+            # 链接拆掉、文字留下；回链由下面统一的 ↩ 提供
+            ref_ids = {a.get('id') for a in self.an.noterefs.get(b.idx, []) if a.get('id')}
+            for a in list(body_src.iter(X + 'a')):
+                if (a.get('href') or '').partition('#')[2] in ref_ids and \
+                        not NOTE_LABEL_RE.fullmatch(re.sub(r'\s+', '', ''.join(a.itertext())) or 'x'):
+                    _unwrap(a)
             # 去掉原来的「[n]」回链（编号由 ol 自动生成）；几处注号共用一条注文时开头是「[1][2][3]」，都去掉
             for a in list(body_src.iter(X + 'a')):
                 before = (a.getparent().text or '') if a.getprevious() is None else (a.getprevious().tail or '')

@@ -155,7 +155,8 @@ def compare_blocks(blocks, removed_roles: set[str], after: Book) -> BlockCheck:
             missing.append((b.role, b.text))
     # 图片没有文字，按块核对不出丢失：另数一遍图片（有意删除的块里的不算）
     media = lambda el: sum(1 for d in el.iter() if isinstance(d.tag, str) and d.tag.rsplit('}', 1)[-1] in ('img', 'image'))
-    imgs_before = sum(media(b.el) for b in blocks if b.role not in removed_roles)
+    # 图片注号（注号是一张小图）重建时换成编号，不算丢图
+    imgs_before = sum(media(b.el) - b.attrs.get('noteref_imgs', 0) for b in blocks if b.role not in removed_roles)
     imgs_after = 0
     for it in after.spine_items():
         if it.path in after.files and it.media_type == 'application/xhtml+xml':

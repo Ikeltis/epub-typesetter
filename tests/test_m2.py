@@ -326,3 +326,37 @@ def test_visible_toc_with_group_rows_removed():
     assert '第一部' not in text and '第二部' not in text and '>目录<' not in text
     bodies = ''.join(re.findall(r'<body.*?</body>', text, re.S))
     assert bodies.count('第1章') == 1                  # 只剩正文里的章标题（<title> 里的不算）
+
+
+def test_image_noteref_with_linked_note_body():
+    """注号是一张小图、注文整段包在指回注号的链接里（哈利波特全集的写法）：照样认作注释，
+    改成书末尾注；注文里旧的回链拆掉只留文字；注号图换成编号不算丢图。"""
+    body = XHTML11.format(title='正文', body=(
+        '<h1>第1章 开端<sup><a href="#footnote2" id="note2" epub:type="noteref" '
+        'xmlns:epub="http://www.idpf.org/2007/ops"><img alt="注" src="../Images/cover.jpg"/></a></sup></h1>'
+        '<p>上马约卡岛<sup><a href="#footnote1" id="note1"><img alt="note1" '
+        'src="../Images/cover.jpg" height="12"/></a></sup>度假去了。</p>'
+        '<p>又一段<sup><a href="#footnote3" id="note3"><img alt="注" src="../Images/cover.jpg"/></a></sup>。</p>'
+        '<p id="footnote1"><a href="#note1">马约卡岛，在西地中海，属西班牙。</a></p>'
+        '<p id="footnote2"><a href="#note2">标题上的注。</a></p>'
+        '<p id="footnote3"><a href="#note3"><img alt="alt" src="../Images/cover.jpg" style="height: 1em"/></a></p>'))
+    b = Book.load(make_epub({'OEBPS/Text/c1.xhtml': body, 'OEBPS/Text/c2.xhtml': None}))
+    rep = optimize(b)
+    out = Book.load(b.to_bytes())
+    bc = compare_blocks(rep.analysis.blocks, REMOVED_ROLES, out)
+    assert bc.ok, bc.summary()
+    ch = next(out.files[p].decode() for p in out.files if p.endswith('chapter01.xhtml'))
+    assert 'class="noteref"' in ch and 'href="endnotes.xhtml#note-1"' in ch
+    assert '马约卡岛，在西地中海' not in ch                          # 注文不再留在章末
+    notes = out.files['OEBPS/Text/endnotes.xhtml'].decode()
+    assert notes.count('<li id="note-') == 3
+    li = re.search(r'<li id="note-2">.*?</li>', notes, re.S).group(0)
+    assert '<p>马约卡岛，在西地中海，属西班牙。' in li                   # 旧回链拆掉，只留文字
+    assert 'backlink' in li
+    # 标题里的注号也配上；目录文字不带注号编号
+    assert '标题上的注。' in re.search(r'<li id="note-1">.*?</li>', notes, re.S).group(0)
+    nav = next(i for i in out.manifest() if 'nav' in i.properties)
+    assert '>第1章　开端</a>' in out.files[nav.path].decode()
+    # 整条注文只有一张图：按原样显示，不当成行内图片字压成一个字高
+    li3 = re.search(r'<li id="note-3">.*?</li>', notes, re.S).group(0)
+    assert '<img' in li3 and 'glyph' not in li3

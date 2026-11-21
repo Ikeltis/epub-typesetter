@@ -574,23 +574,31 @@ def analyze(book: Book, decisions: dict | None = None) -> Analysis:
                 return bool(re.fullmatch(r'(\[\d{1,3}\]|［\d{1,3}］|\d{1,3}[.．]?|[①-⑳]|\s)*', lead))
         return False
     for b in blocks:
-        if b.role in ('toc', 'heading'):
+        if b.role == 'toc':
             continue
         for a in b.el.iter(X + 'a'):
             label = _norm(''.join(a.itertext()))
             href = a.get('href', '')
             if not href or is_external(href) or '#' not in href or len(label) > 6:
                 continue
+            # 标题里的链接多是目录式跳转；只有明确的注号（标了 noteref，或注号是一张图）才配对
+            if b.role == 'heading' and 'noteref' not in (a.get('{%s}type' % NS['epub']) or '') \
+                    and not (not label and a.find('.//' + X + 'img') is not None):
+                continue
             target = by_anchor.get((Book.resolve(b.doc, href), href.partition('#')[2]))
             if target is None or target is b:
                 continue
             labelled = NOTE_LABEL_RE.fullmatch(label or 'x') and _norm(target.text).startswith(label)
-            mutual = (NOTE_LABEL_RE.fullmatch(label or 'x') or re.fullmatch(r'\d{1,3}[.．]?|\*{1,3}|†', label or 'x')) \
-                and links_back(target, b.doc, a.get('id'))
+            # 注号是一张小图（<a href="#fn1" id="n1"><img alt="note1"/></a>）：没有文字，只认互相链接
+            img_ref = not label and a.find('.//' + X + 'img') is not None
+            mutual = (NOTE_LABEL_RE.fullmatch(label or 'x') or re.fullmatch(r'\d{1,3}[.．]?|\*{1,3}|†', label or 'x')
+                      or img_ref) and links_back(target, b.doc, a.get('id'))
             if not (labelled or mutual):
                 continue
-            target.role, target.reason = 'note', f'被正文注号 {label} 指向'
+            target.role, target.reason = 'note', f'被正文注号 {label or "（图片）"} 指向'
             noterefs.setdefault(target.idx, []).append(a)
+            if img_ref:            # 重建时注号图换成编号：图片计数不算它（textcheck）
+                b.attrs['noteref_imgs'] = b.attrs.get('noteref_imgs', 0) + sum(1 for _ in a.iter(X + 'img'))
     # 配上的注号在重建时换成新编号：文字校验不算原注号的字（[n] 已由校验本身归一，裸数字注号要在这里去掉）
     ref_ids = {id(a) for refs in noterefs.values() for a in refs}
     for b in blocks:
@@ -616,7 +624,9 @@ def analyze(book: Book, decisions: dict | None = None) -> Analysis:
         while j < len(blocks):
             nb = blocks[j]
             if nb.doc != b.doc or nb.role != 'para' and nb.role != 'quote' or nb.size != b.size \
+                    or not nb.text \
                     or NOTE_LABEL_RE.match(nb.text) or _norm(nb.text) in NOTE_TITLES:
+                # 没有字的块（插图、「返回索引」小图标）不是注文续段
                 break
             nb.role, nb.group, nb.reason = 'note-cont', b.idx, '注释的续段'
             j += 1

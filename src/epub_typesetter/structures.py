@@ -169,6 +169,9 @@ class _Ctx:
         return self.blocks[j] if 0 <= j < len(self.blocks) and self.blocks[j].doc == b.doc else None
 
 
+_GONE = {'toc', 'note-head', 'junk', 'cover', 'dropped'}   # 重建时删掉的角色（同 rebuild.REMOVED_ROLES）
+
+
 # ---------- 诗歌 ----------
 
 def _poem_lines(b) -> list[tuple[str, float]]:
@@ -330,6 +333,10 @@ def detect_letters(ctx: _Ctx) -> None:
         last_val = None
         while c is not None and steps < 40 and c.role not in ('heading',) and c.unit < 0:
             t = c.text
+            if c.role in _GONE:                        # 要删掉的块（失效导航图标等）不当署名，跳过
+                c = ctx.nxt(c)
+                steps += 1
+                continue
             if len(t) <= 14 and VALEDICTION.match(t):
                 tail[c.idx], last_val = 'valediction', c
             elif last_val is not None and c.idx == last_val.idx + 1 and len(t) <= 8 and \
@@ -370,7 +377,7 @@ def detect_letters(ctx: _Ctx) -> None:
         for idx, part in tail.items():
             blocks[idx].role, blocks[idx].unit, blocks[idx].part = 'letter', u, part
         for x in blocks[b.idx + 1:end.idx]:          # 信尾之间夹的正文（如「此致」与署名之间）
-            if x.unit < 0:
+            if x.unit < 0 and x.role not in _GONE:
                 x.role, x.unit, x.part = 'letter', u, 'body'
         for x in ps:
             x.role, x.unit, x.part = 'letter', u, 'postscript'

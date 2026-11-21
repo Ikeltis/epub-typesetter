@@ -690,6 +690,66 @@ def analyze(book: Book, decisions: dict | None = None) -> Analysis:
         if first is not None and is_cover(first) and first.idx < 3:
             first.role, first.reason = 'cover', '全书开头的封面图（重建时另生成标准封面页）'
 
+    # 6c) 没用的装饰小图，删去：
+    #   - 导航图标：整块只有图，图链到书内目录（「返回目录」箭头、放大镜）；目录页删掉后点不了
+    #   - 分隔小图：同一张图不带链接、单独成段、全书反复出现，前后都是正文（场景之间的小雨伞）
+    gone_roles = ('toc', 'junk')
+    anchor_block = {(b.doc, a): b for b in blocks for a in b.anchors}
+    doc_blocks: dict[str, list] = {}
+    for b in blocks:
+        doc_blocks.setdefault(b.doc, []).append(b)
+
+    def img_srcs(b):
+        return [Book.resolve(b.doc, i.get('src') or '') for i in b.el.iter(X + 'img')]
+
+    def dead_nav(b) -> bool:
+        """块里只有图、每张图都链到已删除的内容（目录条目、整份删掉的目录文件、删掉的图标）。"""
+        imgs = list(b.el.iter(X + 'img'))
+        links = [next((a for a in i.iterancestors() if a.tag == X + 'a'), None) for i in imgs]
+        if not imgs or any(a is None or not a.get('href') or is_external(a.get('href')) for a in links):
+            return False
+        for a in links:
+            href = a.get('href')
+            path, frag = Book.resolve(b.doc, href), href.partition('#')[2]
+            t = anchor_block.get((path, frag)) if frag else None
+            if t is not None and t.role in gone_roles:
+                continue
+            if (not frag or t is None) and path in doc_blocks and \
+                    all(x.role in gone_roles for x in doc_blocks[path]):
+                continue
+            return False
+        return True
+
+    def mark_dead_nav() -> None:
+        changed = True
+        while changed:                     # 删掉一个图标可能让另一份文件整份变空，再看一轮
+            changed = False
+            for b in blocks:
+                if b.role not in gone_roles + ('heading', 'note') and not b.text and dead_nav(b):
+                    b.role, b.reason = 'junk', '链到已删目录的导航图标'
+                    changed = True
+    mark_dead_nav()
+    lone = [b for b in blocks if b.role == 'figure' and not b.text and _local(b.el.tag) != 'figure'
+            and len(img_srcs(b)) == 1 and b.el.find('.//' + X + 'a') is None
+            and not any(x.group == b.idx for x in blocks[b.idx + 1:b.idx + 2])]
+    uses = Counter(img_srcs(b)[0] for b in lone)
+
+    def between_text(b) -> bool:
+        prev = blocks[b.idx - 1] if b.idx else None
+        nxt = blocks[b.idx + 1] if b.idx + 1 < len(blocks) else None
+        return prev is not None and prev.role == 'para' and prev.text != '' and \
+            nxt is not None and nxt.role in ('para', 'center') and nxt.text != ''
+    seps = {src for src, n in uses.items()
+            if n >= 5 and sum(between_text(b) for b in lone if img_srcs(b)[0] == src) >= 0.8 * n}
+    for b in blocks:
+        if b.role == 'figure' and not b.text and _local(b.el.tag) != 'figure' and b.el.find('.//' + X + 'a') is None \
+                and len(img_srcs(b)) == 1 and img_srcs(b)[0] in seps:
+            b.role, b.reason = 'junk', '反复出现的分隔小图'
+            for c in blocks[b.idx + 1:b.idx + 3]:   # 被当成图注的短行（「本集·完」）：图删了，字留下
+                if c.group == b.idx and c.role == 'caption':
+                    c.role, c.group, c.reason = 'center', -1, '分隔小图后的居中短行'
+    mark_dead_nav()                        # 分隔图删掉后，链向它们所在页的图标也失效了
+
     # 7) 广告文件：整份文件多数块是引流内容
     junk_docs = set()
     per_doc = Counter(b.doc for b in blocks)

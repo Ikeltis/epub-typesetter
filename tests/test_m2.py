@@ -360,3 +360,32 @@ def test_image_noteref_with_linked_note_body():
     # 整条注文只有一张图：按原样显示，不当成行内图片字压成一个字高
     li3 = re.search(r'<li id="note-3">.*?</li>', notes, re.S).group(0)
     assert '<img' in li3 and 'glyph' not in li3
+
+
+def test_separator_images_and_dead_nav_icons_removed():
+    """场景之间反复出现的分隔小图（小雨伞）、链到书内目录的导航图标（目录页删掉后点不了）：都删去；
+    分隔图后被当成图注的「本集·完」留作居中文字；只出现一次的正文插图保留。"""
+    opf = OPF2.replace('<item id="cover-img"', ''.join(
+        f'<item id="{n}" href="Images/{n}.jpg" media-type="image/jpeg"/>' for n in ('sep', 'arrow', 'ill'))
+        + '<item id="cover-img"')
+    toc_page = XHTML11.format(title='目录', body='<h1>目录</h1><p><a href="c2.xhtml#a1">第1章 开端</a></p>'
+                                                  '<p><a href="c2.xhtml#a2">第2章 远行</a></p>')
+    sep = '<div class="img0"><img alt="alt" src="../Images/sep.jpg" width="40px"/></div>'
+    paras = sep.join(f'<p>第{k}段正文，写得长一些。</p>' for k in range(6))
+    body = XHTML11.format(title='正文', body=(
+        f'<h1 id="a1">第1章 开端</h1><div class="r"><a href="c1.xhtml"><img alt="alt" src="../Images/arrow.jpg"'
+        f' width="24"/></a></div>{paras}<div><img alt="alt" src="../Images/ill.jpg"/></div><p>又一段。</p>'
+        f'<h1 id="a2">第2章 远行</h1><p>乙。</p><div class="img0"><img alt="alt" src="../Images/sep.jpg"'
+        f' width="80px"/></div><p class="c">本集·完</p>'))
+    files = {'OEBPS/content.opf': opf, 'OEBPS/Text/c1.xhtml': toc_page, 'OEBPS/Text/c2.xhtml': body}
+    files.update({f'OEBPS/Images/{n}.jpg': JPEG for n in ('sep', 'arrow', 'ill')})
+    b = Book.load(make_epub(files))
+    rep = optimize(b)
+    out = Book.load(b.to_bytes())
+    bc = compare_blocks(rep.analysis.blocks, REMOVED_ROLES, out)
+    assert bc.ok, bc.summary()
+    xs = ''.join(out.files[p].decode() for p in out.files if p.endswith('.xhtml'))
+    assert 'sep.jpg' not in xs and 'arrow.jpg' not in xs and '<hr' not in xs   # 直接删，不换成分隔线
+    assert xs.count('ill.jpg') == 1                                           # 正文插图保留
+    assert '本集·完' in xs and '<figcaption>本集·完' not in xs
+    assert all(f'第{k}段正文' in xs for k in range(6))

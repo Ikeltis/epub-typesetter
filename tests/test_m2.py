@@ -375,8 +375,8 @@ def test_separator_images_and_dead_nav_icons_removed():
     body = XHTML11.format(title='正文', body=(
         f'<h1 id="a1">第1章 开端</h1><div class="r"><a href="c1.xhtml"><img alt="alt" src="../Images/arrow.jpg"'
         f' width="24"/></a></div>{paras}<div><img alt="alt" src="../Images/ill.jpg"/></div><p>又一段。</p>'
-        f'<h1 id="a2">第2章 远行</h1><p>乙。</p><div class="img0"><img alt="alt" src="../Images/sep.jpg"'
-        f' width="80px"/></div><p class="c">本集·完</p>'))
+        f'<h1 id="a2">第2章 远行</h1><p>他拆开了信。</p>{sep}<p>波特先生：</p><p>来信正文。</p><p>乙。</p>'
+        f'<div class="img0"><img alt="alt" src="../Images/sep.jpg" width="80px"/></div><p class="c">本集·完</p>'))
     files = {'OEBPS/content.opf': opf, 'OEBPS/Text/c1.xhtml': toc_page, 'OEBPS/Text/c2.xhtml': body}
     files.update({f'OEBPS/Images/{n}.jpg': JPEG for n in ('sep', 'arrow', 'ill')})
     b = Book.load(make_epub(files))
@@ -385,7 +385,9 @@ def test_separator_images_and_dead_nav_icons_removed():
     bc = compare_blocks(rep.analysis.blocks, REMOVED_ROLES, out)
     assert bc.ok, bc.summary()
     xs = ''.join(out.files[p].decode() for p in out.files if p.endswith('.xhtml'))
-    assert 'sep.jpg' not in xs and 'arrow.jpg' not in xs and '<hr' not in xs   # 直接删，不换成分隔线
+    assert 'arrow.jpg' not in xs and '<hr' not in xs                           # 直接删，不换成分隔线
+    # 同一张图放在信的称呼前面是信头徽记，留下；其余几处（段落之间、「本集·完」前）都删
+    assert xs.count('sep.jpg') == 1 and re.search(r'sep\.jpg"[^>]*/></figure><p[^>]*>波特先生：', xs)
     assert xs.count('ill.jpg') == 1                                           # 正文插图保留
     assert '本集·完' in xs and '<figcaption>本集·完' not in xs
     assert all(f'第{k}段正文' in xs for k in range(6))

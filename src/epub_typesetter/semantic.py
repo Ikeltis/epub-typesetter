@@ -741,9 +741,25 @@ def analyze(book: Book, decisions: dict | None = None) -> Analysis:
             nxt is not None and nxt.role in ('para', 'center') and nxt.text != ''
     seps = {src for src, n in uses.items()
             if n >= 5 and sum(between_text(b) for b in lone if img_srcs(b)[0] == src) >= 0.8 * n}
+    def letterhead(b) -> bool:
+        """同一张小图放在信、告示开头时是徽记，不是分隔（魔法部来信、教育令上方的巫师帽）：
+        后面紧跟信的称呼（以冒号结尾的短行），或紧跟居中的标题行、且之后还有正文。
+        居中行之后再没有字的（一部书结尾的「本集·完」）仍是分隔装饰。"""
+        nx = blocks[b.idx + 1] if b.idx + 1 < len(blocks) else None
+        if nx is None or nx.doc != b.doc or not nx.text or nx.role in gone_roles:   # 目录页上的帽子不是徽记
+            return False
+        if nx.role == 'para' and len(nx.text) <= 12 and nx.text.rstrip().endswith(('：', ':')):
+            return True
+        if nx.role in ('center', 'caption') or nx.align == 'center':
+            for x in blocks[nx.idx + 1:]:
+                if x.doc != b.doc or x.role == 'heading':
+                    return False
+                if x.text and x.role not in gone_roles + ('note', 'note-cont', 'note-head'):   # 章末注文不算正文
+                    return True
+        return False
     for b in blocks:
         if b.role == 'figure' and not b.text and _local(b.el.tag) != 'figure' and b.el.find('.//' + X + 'a') is None \
-                and len(img_srcs(b)) == 1 and img_srcs(b)[0] in seps:
+                and len(img_srcs(b)) == 1 and img_srcs(b)[0] in seps and not letterhead(b):
             b.role, b.reason = 'junk', '反复出现的分隔小图'
             for c in blocks[b.idx + 1:b.idx + 3]:   # 被当成图注的短行（「本集·完」）：图删了，字留下
                 if c.group == b.idx and c.role == 'caption':

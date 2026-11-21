@@ -189,6 +189,48 @@ def _iter_text_br(el: etree._Element):
             yield c.tail
 
 
+def _drop_keep_tail(node: etree._Element) -> None:
+    """删掉元素，它后面的文字（tail）接到前一个兄弟或父元素的文字上。"""
+    parent = node.getparent()
+    prev = node.getprevious()
+    if node.tail:
+        if prev is not None:
+            prev.tail = (prev.tail or '') + node.tail
+        else:
+            parent.text = (parent.text or '') + node.tail
+    parent.remove(node)
+
+
+def _tidy_breaks(e: etree._Element) -> None:
+    """移走题图后清理标题里的换行：连续的 <br/> 只留一个，开头、结尾的 <br/> 去掉，换行两旁的源码空白去掉。"""
+    ws = ' \t\r\n'
+    changed = True
+    while changed:
+        changed = False
+        kids = list(e)
+        for k, c in enumerate(kids):
+            if c.tag != X + 'br':
+                continue
+            before_blank = (c.getprevious() is None and not (e.text or '').strip(ws)) or \
+                (c.getprevious() is not None and c.getprevious().tag == X + 'br'
+                 and not (c.getprevious().tail or '').strip(ws))
+            after_blank = k == len(kids) - 1 and not (c.tail or '').strip(ws)
+            if before_blank or after_blank:
+                _drop_keep_tail(c)
+                changed = True
+                break
+    for c in e.findall(X + 'br'):
+        if c.tail:
+            c.tail = c.tail.lstrip(ws)
+        prev = c.getprevious()
+        if prev is not None and prev.tail:
+            prev.tail = prev.tail.rstrip(ws)
+        elif prev is None and e.text:
+            e.text = e.text.rstrip(ws)
+    if e.text:
+        e.text = e.text.lstrip(ws)
+
+
 def _resolve_soft(dst: etree._Element) -> None:
     """SOFT 两侧（跨标签看）有汉字或全角标点就删掉，两侧都是西文才变一个空格。"""
     order = []
@@ -771,6 +813,33 @@ class Rebuilder:
             br.getparent().remove(br)
         e.text = title
 
+    @staticmethod
+    def _title_images_out(e: etree._Element) -> list:
+        """标题里夹着题图（「第2章<br/><img/><br/>悄悄消失的玻璃」）：图移出标题，
+        标题只留文字（章号、换行、章名），图各自成一个居中的 figure 放在标题下方。
+        只有图、没有字的标题（书名画在图上）不动；图片字（.glyph）是文字的一部分，不动。"""
+        if not ''.join(e.itertext()).strip():
+            return []
+        imgs = [x for x in e.iter(X + 'img') if 'glyph' not in (x.get('class') or '').split()]
+        out = []
+        for img in imgs:
+            node = img                                # 只包着这张图的空壳（如指回目录的 <a>）一起移走
+            while node.getparent() is not e and not ''.join(node.getparent().itertext()).strip() \
+                    and len(node.getparent()) == 1:
+                node = node.getparent()
+            _drop_keep_tail(node)
+            for k in ('width', 'height', 'style'):
+                img.attrib.pop(k, None)
+            if (img.get('alt') or '').strip().lower() in ('alt', 'img', 'image'):
+                img.set('alt', '')                    # 占位 alt：题图是装饰
+            fig = _el('figure')
+            fig.append(img)
+            img.tail = None
+            out.append(fig)
+        if out:
+            _tidy_breaks(e)
+        return out
+
     def _only_noteref(self, el) -> bool:
         """el 不是注号本身，但里面有注号，且除注号文字外没有别的文字。"""
         if id(el) in self.noteref_els:
@@ -988,8 +1057,10 @@ class Rebuilder:
                     e.text = ORDINAL_SEP_RE.sub('\\1\u3000', e.text, count=1)
             if b.role == 'heading' and b.attrs.get('src_title') and not ''.join(e.itertext()).strip():
                 self._title_from_attr(e, b.attrs.get('title') or b.attrs['src_title'])
+            moved = self._title_images_out(e) if b.role == 'heading' else []
             self._anchors(b, e)
             sec.append(e)
+            sec.extend(moved)                         # 标题里的题图：放在标题下方，单独居中
             i += 1
         if ch.epub_type == 'glossary':
             for dl in sec.iter(X + 'dl'):

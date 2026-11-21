@@ -231,7 +231,8 @@ OMNIBUS_T1 = XHTML11.format(title='1', body='<h1 title="Ⅰ 甲书"><img alt="t1
 OMNIBUS_T2 = ('<?xml version="1.0" encoding="utf-8"?>\n<html xmlns="http://www.w3.org/1999/xhtml"><head><title>2</title>'
               '</head><body style="background: url(../Images/bg.jpg) no-repeat center">'
               '<div class="img0"><h1 title="Ⅱ 乙书"><br/></h1></div></body></html>')
-OMNIBUS_T3 = XHTML11.format(title='3', body='<h2>第1章 归来</h2><p>丙。</p><h2>第2章 再会</h2><p>丁。</p>'
+OMNIBUS_T3 = XHTML11.format(title='3', body='<h2>第1章<br/> <span class="img0"> <img alt="alt" src="../Images/bg.jpg"'
+                            ' height="100"/> </span><br/>归来</h2><p>丙。</p><h2>第2章 再会</h2><p>丁。</p>'
                             '<h2>尾声</h2><p>戊。</p><h2>阿不思·邓布利多<br/>的序言</h2><p>己。</p>')
 OMNIBUS_T4 = XHTML11.format(title='4', body='<h1>Ⅲ 丙书</h1><h2>第1章 启程</h2><p>庚。</p><h2>第2章 终点</h2><p>辛。</p>'
                             '<h1>附录</h1><h2>前传</h2><p>癸。</p><h2>小书</h2><h3>版权信息</h3><p>子。</p>'
@@ -276,6 +277,9 @@ def test_omnibus_titles_in_title_attr_become_parts():
     assert any('alt="Ⅰ 甲书"' in s for s in xs.values())                    # 图片标题：文字进 alt，图照常显示
     assert any('>Ⅱ 乙书</h2>' in s for s in xs.values())                     # 空标题：直接输出文字
     assert any('bg.jpg' in s for s in xs.values()) and 'OEBPS/Images/bg.jpg' in out.files   # 背景整页图没丢
+    # 「第1章<br/>题图<br/>归来」→ 标题只留「第1章<br/>归来」，题图移到标题下方，单独成居中的 figure
+    assert any(re.search(r'<h3 class="chapter-title" id="[^"]+">第1章<br/>归来</h3>'
+                         r'<figure><img alt="" src="\.\./Images/bg\.jpg"/></figure>', s) for s in xs.values())
 
 
 def test_omnibus_volume_forced_to_chapter_and_image_title_renamed():

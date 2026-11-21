@@ -391,3 +391,52 @@ def test_separator_images_and_dead_nav_icons_removed():
     assert xs.count('ill.jpg') == 1                                           # 正文插图保留
     assert '本集·完' in xs and '<figcaption>本集·完' not in xs
     assert all(f'第{k}段正文' in xs for k in range(6))
+
+
+def test_letter_paper_boxes_and_source_lists():
+    """原书的信纸框（div.letter）：整框排成 blockquote.letter（书信样式和楷体），框里的清单、小标题照常；
+    有称谓才标 z3998:letter；框里的 blockquote 不再嵌套。原书 ol/ul 按实际显示样式保留成列表。"""
+    body = XHTML11.format(title='正文', body=(
+        '<h1>第1章 开端</h1><p>他读道：</p>'
+        '<div class="letter"><p class="letint">霍格沃茨魔法学校</p><p class="sc">制服</p><p>一年级新生需要：</p>'
+        '<ol class="list" style="list-style:circle outside"><li>三套工作袍</li><li>一顶尖顶帽</li></ol>'
+        '<blockquote><p>不准自带飞天扫帚。</p></blockquote></div>'
+        '<p>他又读第二封：</p>'
+        '<div class="letter"><p>亲爱的波特先生：</p><p>我们接到报告。</p><p>马法尔达·霍普柯克</p></div>'
+        '<p>后来：</p><ol style="list-style-type: decimal;" start="54"><li>第五十四条</li><li>第五十五条</li></ol>'))
+    b = Book.load(make_epub({'OEBPS/Text/c1.xhtml': body, 'OEBPS/Text/c2.xhtml': None}))
+    rep = optimize(b)
+    out = Book.load(b.to_bytes())
+    bc = compare_blocks(rep.analysis.blocks, REMOVED_ROLES, out)
+    assert bc.ok, bc.summary()
+    xs = ''.join(out.files[p].decode() for p in out.files if p.endswith('chapter01.xhtml'))
+    boxes = re.findall(r'<blockquote class="letter"[^>]*>.*?</blockquote>', xs, re.S)
+    assert len(boxes) == 2
+    assert 'z3998:letter' not in boxes[0] and 'z3998:letter' in boxes[1]       # 清单不是信，第二封是
+    assert '<ul class="bullets"><li>三套工作袍</li><li>一顶尖顶帽</li></ul>' in boxes[0]
+    assert '<blockquote' not in boxes[0][1:] and '不准自带飞天扫帚。' in boxes[0]
+    assert 'z3998:salutation' in boxes[1]
+    assert '<ol start="54"><li>第五十四条</li>' in xs
+    css = out.files['OEBPS/styles/typesetter.css'].decode()
+    assert '.letter li{' in css                                               # 信里的清单也用楷体
+
+
+def test_reader_specific_stuff_removed():
+    """多看等阅读器专用的东西不进成品：OPF 私有 meta、只给它们用的字体、指向已删文件的 encryption.xml、
+    带厂商名的唯一标识 id。"""
+    opf = OPF2.replace('unique-identifier="bookid"', 'unique-identifier="duokan-book-id"') \
+        .replace('id="bookid"', 'id="duokan-book-id"') \
+        .replace('<meta name="cover" content="cover-img"/>',
+                 '<meta name="cover" content="cover-img"/><meta name="duokan-body-font" content="DK-SONGTI"/>') \
+        .replace('<item id="cover-img"', '<item id="f1" href="Fonts/dk.ttf" media-type="font/ttf"/><item id="cover-img"')
+    enc = ('<?xml version="1.0" encoding="UTF-8"?><encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container"'
+           ' xmlns:enc="http://www.w3.org/2001/04/xmlenc#"><enc:EncryptedData><enc:CipherData>'
+           '<enc:CipherReference URI="OEBPS/Styles/dkagent.css"/></enc:CipherData></enc:EncryptedData></encryption>')
+    b = Book.load(make_epub({'OEBPS/content.opf': opf, 'OEBPS/Fonts/dk.ttf': b'\x00\x01\x00\x00' + b'\x00' * 60,
+                             'META-INF/encryption.xml': enc}))
+    optimize(b)
+    out = Book.load(b.to_bytes())
+    opf_out = out.files[out.opf_path].decode()
+    assert 'duokan' not in opf_out and 'dk.ttf' not in opf_out
+    assert 'unique-identifier="pub-id"' in opf_out and 'id="pub-id"' in opf_out
+    assert 'META-INF/encryption.xml' not in out.files and 'OEBPS/Fonts/dk.ttf' not in out.files

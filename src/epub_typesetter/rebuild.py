@@ -43,6 +43,11 @@ KEEP_INLINE = {'a', 'b', 'strong', 'i', 'em', 'sup', 'sub', 'u', 's', 'del', 'in
                'kbd', 'samp', 'ruby', 'rt', 'rp', 'rb', 'small', 'time', 'var', 'dfn', 'mark', 'bdi', 'bdo', 'wbr',
                'br', 'img', 'span'}
 REMOVED_ROLES = {'toc', 'note-head', 'junk', 'cover', 'dropped'}
+# 信的各部分 → (类, epub:type)（04 §4.8）
+LETTER_PARTS = {'salutation-pre': ('salutation', 'z3998:salutation'), 'salutation': ('salutation', 'z3998:salutation'),
+                'valediction': (None, 'z3998:valediction'), 'closing': ('closing', 'z3998:valediction'),
+                'signature': ('signature', 'z3998:sender z3998:signature'), 'date': ('date', None),
+                'dateline': ('dateline', None), 'postscript': ('postscript', 'z3998:postscript'), 'body': (None, None)}
 TYPE_BY_TITLE = [
     (re.compile(r'^版权'), 'copyright-page', None),
     (re.compile(r'^(编辑手记|前言|序|序言|自序|推荐序|代序|引言|导言|导读|致读者|写在前面)'), 'preface', 'doc-preface'),
@@ -917,9 +922,20 @@ class Rebuilder:
                 sec.set('role', ch.role)
         blocks = ch.blocks
         i = 0
+        out, cur_box = sec, None                      # out：当前往里放的容器（信纸框里就是框）
         while i < len(blocks):
             b = blocks[i]
             self.cur_doc = b.doc
+            box_id = b.attrs.get('letter_box')
+            if box_id != cur_box:                     # 进出信纸框
+                cur_box = box_id
+                out = sec if box_id is None else self._letter_box(sec, blocks, i)
+            if box_id is not None and b.role == 'letter':   # 框里的信件各部分：直接成段，不再套一层信
+                out.append(self._letter_part(b))
+                i += 1
+                continue
+            if box_id is not None and b.role == 'quote':    # 信里不再嵌 blockquote（04 4.8.1.3）
+                b.role = 'para'
             if b.role == 'heading-merged':            # 已并入相邻标题
                 i += 1
                 continue
@@ -935,13 +951,14 @@ class Rebuilder:
                 b.role = 'para'                       # 没被引用的注（孤注）：按普通段落保留
             if b.role in ('poem', 'letter', 'ol', 'dl', 'gloss') and b.unit >= 0:
                 j = i
-                while j < len(blocks) and blocks[j].unit == b.unit and blocks[j].role == b.role:
+                while j < len(blocks) and blocks[j].unit == b.unit and blocks[j].role == b.role \
+                        and blocks[j].attrs.get('letter_box') == box_id:
                     j += 1
-                sec.append(getattr(self, f'_render_{b.role}')(blocks[i:j]))
+                out.append(getattr(self, f'_render_{b.role}')(blocks[i:j]))
                 i = j
                 continue
             if b.role == 'loi-head':
-                sec.append(self._render_list_of(blocks[i:], ch))
+                out.append(self._render_list_of(blocks[i:], ch))
                 i += 1
                 while i < len(blocks) and blocks[i].role == 'loi-entry':
                     i += 1
@@ -981,19 +998,19 @@ class Rebuilder:
                 for img in fig.iter(X + 'img'):
                     if img.get('alt') is None:
                         img.set('alt', '')
-                sec.append(fig)
+                out.append(fig)
                 i = j
                 continue
             if b.role in ('bullet', 'quote'):
                 wrap = _el('ul', {'class': 'bullets'}) if b.role == 'bullet' else _el('blockquote')
-                while i < len(blocks) and blocks[i].role == b.role:
+                while i < len(blocks) and blocks[i].role == b.role and blocks[i].attrs.get('letter_box') == box_id:
                     self.cur_doc = blocks[i].doc
                     item = _el('li' if b.role == 'bullet' else 'p')
                     self.inline(blocks[i].el, item, BULLET_RE if b.role == 'bullet' else None)
                     self._anchors(blocks[i], item)
                     wrap.append(item)
                     i += 1
-                sec.append(wrap)
+                out.append(wrap)
                 continue
             if b.role == 'keep' or b.role == 'figure' and _local(b.el.tag) == 'figure':
                 e = copy.deepcopy(b.el)
@@ -1018,14 +1035,14 @@ class Rebuilder:
                 if b.role == 'keep':                  # 链接改写之后再收表题（表题的链接已由 inline 改写过）
                     self._render_tables(b, e, blocks[i - 1] if i else None)
                 self._anchors(b, e)
-                sec.append(e)
+                out.append(e)
                 i += 1
                 if i < len(blocks) and blocks[i].role == 'table-note' and blocks[i].group == b.idx:
                     note = _el('p', {'class': 'table-note'})
                     self.cur_doc = blocks[i].doc
                     self.inline(blocks[i].el, note, sized=True)
                     self._anchors(blocks[i], note)
-                    sec.append(note)
+                    out.append(note)
                     i += 1
                 continue
             if b.role == 'heading':
@@ -1038,7 +1055,7 @@ class Rebuilder:
             elif b.role in ('dialogue', 'stage'):     # 剧本（用户确认后，04 §4.9 写法 B）
                 e = self._script_para(b)
                 self._anchors(b, e)
-                sec.append(e)
+                out.append(e)
                 i += 1
                 continue
             elif b.role == 'item':                    # 中文序号项（04 4.10.2）
@@ -1056,7 +1073,7 @@ class Rebuilder:
                     no.tail = '\u3000' + rest
                     e.insert(0, no)
                 self._anchors(b, e)
-                sec.append(e)
+                out.append(e)
                 i += 1
                 continue
             else:
@@ -1087,8 +1104,8 @@ class Rebuilder:
                 self._title_from_attr(e, b.attrs.get('title') or b.attrs['src_title'])
             moved = self._title_images_out(e) if b.role == 'heading' else []
             self._anchors(b, e)
-            sec.append(e)
-            sec.extend(moved)                         # 标题里的题图：放在标题下方，单独居中
+            out.append(e)
+            out.extend(moved)                         # 标题里的题图：放在标题下方，单独居中
             i += 1
         if ch.epub_type == 'glossary':
             for dl in sec.iter(X + 'dl'):
@@ -1196,17 +1213,29 @@ class Rebuilder:
         self.tpl_used.add('letter')
         self.rep.structures[('书信', 'B')] += 1
         box = _el('blockquote', {'class': 'letter', EPUB + 'type': 'z3998:letter'})
-        spec = {'salutation-pre': ('salutation', 'z3998:salutation'), 'salutation': ('salutation', 'z3998:salutation'),
-                'valediction': (None, 'z3998:valediction'), 'closing': ('closing', 'z3998:valediction'),
-                'signature': ('signature', 'z3998:sender z3998:signature'), 'date': ('date', None),
-                'dateline': ('dateline', None), 'postscript': ('postscript', 'z3998:postscript'), 'body': (None, None)}
         for b in group:
-            cls, et = spec.get(b.part, (None, None))
-            e = _el('p', {'class': cls, EPUB + 'type': et})
-            self.cur_doc = b.doc
-            self.inline(b.el, e)
-            self._anchors(b, e)
-            box.append(e)
+            box.append(self._letter_part(b))
+        return box
+
+    def _letter_part(self, b: Block) -> etree._Element:
+        """信的一部分（称谓、正文、祝颂、署名、日期、附言）：各自成段，带类和 z3998 语义（04 §4.8）。"""
+        cls, et = LETTER_PARTS.get(b.part, (None, None))
+        e = _el('p', {'class': cls, EPUB + 'type': et})
+        self.cur_doc = b.doc
+        self.inline(b.el, e)
+        self._anchors(b, e)
+        return e
+
+    def _letter_box(self, sec: etree._Element, blocks: list[Block], i: int) -> etree._Element:
+        """原书的信纸框（semantic/structures 记的 letter_box）：整框一个 blockquote.letter，书信的样式和字体。
+        框里有称谓才是一封信，才标 z3998:letter（04 4.8.1.4）；入学用品清单、魔法部令这类只借用书信的样式。"""
+        k = blocks[i].attrs['letter_box']
+        group = [b for b in blocks[i:] if b.attrs.get('letter_box') == k]
+        is_letter = any(b.role == 'letter' and b.part in ('salutation', 'salutation-pre') for b in group)
+        box = _el('blockquote', {'class': 'letter', EPUB + 'type': 'z3998:letter' if is_letter else None})
+        self.tpl_used.add('letter')
+        self.rep.structures[('书信' if is_letter else '信纸（文书）', 'B')] += 1
+        sec.append(box)
         return box
 
     def _render_ol(self, group: list[Block]) -> etree._Element:
@@ -1474,6 +1503,7 @@ class Rebuilder:
             self.rep.log.append('追加模板样式：' + '、'.join(n for n in TEMPLATE_ORDER if n in self.tpl_used))
         self.rep.suggestions = self.an.suggestions + self.rep.suggestions
         book.add_item(self.css_path, 'text/css', item_id='typesetter-css', data=css)
+        self._drop_vendor(css)
 
         # 封面页
         cover_item = next((i for i in book.manifest() if 'cover-image' in i.properties), None)
@@ -1512,6 +1542,51 @@ class Rebuilder:
         book.mark_dirty(book.opf_path)
         self.rep.log.append(f'重建 {len(chapters)} 个文件，注释 {self.rep.notes} 条，删除 {len(self.rep.removed)} 块')
         return self.rep
+
+    def _drop_vendor(self, css: bytes) -> None:
+        """去掉阅读器专用的东西（多看、Apple Books、Kindle、掌阅……），成品只留标准 EPUB：
+        - 旧样式表删了之后没人引用的字体（原书给多看等配的字体；主题不嵌字体）
+        - encryption.xml 里指向已删文件的条目（多看加密的 dkagent.css 等），条目删光就删整个文件
+        - OPF 里的私有 meta（duokan-body-font、ibooks:*），以及 Apple 的 display-options 文件
+        - 唯一标识 id 带厂商名的（duokan-book-id）改成中性名"""
+        book = self.book
+        css_text = css.decode('utf-8', 'replace')
+        for it in list(book.manifest()):
+            if (it.media_type.startswith('font/') or 'font' in it.media_type or 'opentype' in it.media_type) \
+                    and posixpath.basename(it.path) not in css_text:
+                it.element.getparent().remove(it.element)
+                book.delete(it.path)
+                self.rep.log.append(f'删除未引用的字体 {posixpath.basename(it.path)}')
+        enc_path = 'META-INF/encryption.xml'
+        if enc_path in book.files:
+            root = etree.fromstring(book.files[enc_path])
+            ENC = '{http://www.w3.org/2001/04/xmlenc#}'
+            for ed in list(root.iter(ENC + 'EncryptedData')):
+                ref = ed.find(f'.//{ENC}CipherReference')
+                if ref is None or ref.get('URI', '').lstrip('/') not in book.files:
+                    ed.getparent().remove(ed)
+            if root.find(f'.//{ENC}EncryptedData') is None:
+                book.delete(enc_path)
+                self.rep.log.append('删除 encryption.xml（加密的文件都已不在书里）')
+            else:
+                book.set_bytes(enc_path, etree.tostring(root, xml_declaration=True, encoding='utf-8'))
+        book.delete('META-INF/com.apple.ibooks.display-options.xml')
+        vendor = re.compile(r'^(duokan|ibooks:|zhangyue|ireader|amzn|kindle|kobo)', re.I)
+        meta_parent = book.opf.find('opf:metadata', NS)
+        for m in list(meta_parent.iter('{%s}meta' % NS['opf'])) if meta_parent is not None else []:
+            if vendor.match(m.get('name') or '') or vendor.match(m.get('property') or ''):
+                m.getparent().remove(m)
+                self.rep.log.append(f'删除阅读器专用 meta {m.get("name") or m.get("property")}')
+        uid = book.opf.get('unique-identifier') or ''
+        if vendor.match(uid):
+            for e in book.opf.iter():
+                if isinstance(e.tag, str):
+                    if e.get('id') == uid:
+                        e.set('id', 'pub-id')
+                    if e.get('refines') == '#' + uid:
+                        e.set('refines', '#pub-id')
+            book.opf.set('unique-identifier', 'pub-id')
+        book.mark_dirty(book.opf_path)
 
     def _rebuild_nav(self, trees, has_cover: bool) -> None:
         book = self.book

@@ -673,12 +673,87 @@ def detect_ad_lines(ctx: _Ctx) -> None:
             break
 
 
+_LIST_NUM = re.compile(r'decimal|alpha|roman|cjk|han|ideographic|latin|greek|armenian|georgian|hiragana|katakana')
+
+
+def detect_source_lists(ctx: _Ctx) -> None:
+    """原书本身用 <ol>/<ul> 写的列表：按它实际显示的样式保留——有编号的成 ol，圆点的成项目列表；
+    list-style 为 none（看不出是列表）的不动。目录、脚注里的 li 已另作处理（角色不是正文）。"""
+    from .semantic import _style_of, class_styles
+    classes = class_styles(ctx.book)
+    blocks = ctx.blocks
+    i = 0
+    while i < len(blocks):
+        b = blocks[i]
+        parent = b.el.getparent()
+        if b.el.tag != X + 'li' or b.role not in PLAIN or b.unit >= 0 or parent is None \
+                or parent.tag not in (X + 'ol', X + 'ul'):
+            i += 1
+            continue
+        run = [b]
+        j = i + 1
+        while j < len(blocks) and blocks[j].el.getparent() is parent and blocks[j].role in PLAIN \
+                and blocks[j].unit < 0:
+            run.append(blocks[j])
+            j += 1
+        st = _style_of(parent, classes)
+        kind = (st.get('list-style-type') or st.get('list-style') or '').strip()
+        if 'none' in kind.split():
+            i = j
+            continue
+        numbered = bool(_LIST_NUM.search(kind)) if kind else parent.tag == X + 'ol'
+        if numbered:
+            start = int(parent.get('start')) if (parent.get('start') or '').isdigit() else 1
+            u = ctx.unit('ol', run[0], level='A', start=start)
+            for c in run:
+                c.role, c.unit, c.part, c.reason = 'ol', u, 'li', '原书的编号列表'
+        else:
+            for c in run:
+                c.role, c.reason = 'bullet', '原书的项目列表'
+        i = j
+
+
+def detect_letter_boxes(ctx: _Ctx) -> None:
+    """原书标明是信纸的容器（class 含 letter，常画成带框的信纸）：框里的块记同一个 letter_box 编号，
+    重建时整框排成书信（blockquote.letter，楷体），框内的列表、小标题照常各按各的格式。
+    没有称谓的（入学用品清单、魔法部令）也用书信的样式，但不标 z3998:letter（rebuild 判断）。"""
+    box_of: dict[int, int] = {}
+    for b in ctx.blocks:
+        if b.role in _GONE:
+            continue
+        box = next((e for e in [b.el, *b.el.iterancestors()]
+                    if isinstance(e.tag, str) and e.tag != X + 'body'
+                    and 'letter' in re.split(r'[\s_-]+', (e.get('class') or '').lower())), None)
+        if box is None:
+            continue
+        k = box_of.setdefault(id(box), len(box_of))
+        b.attrs['letter_box'] = k
+    # 框里图后的居中短行是框内的小标题（「制服」），不是图注
+    for b in ctx.blocks:
+        if b.role == 'caption' and 'letter_box' in b.attrs and b.el.tag != X + 'figcaption':
+            b.role, b.group, b.reason = 'center', -1, '信纸里的小标题'
+    # 框里有称谓、但书信识别没成信（没认出信尾）：有称谓就够了（04 4.8.1.4），称谓段记为信的称谓
+    boxes: dict[int, list] = {}
+    for b in ctx.blocks:
+        if 'letter_box' in b.attrs:
+            boxes.setdefault(b.attrs['letter_box'], []).append(b)
+    for group in boxes.values():
+        if any(b.role == 'letter' for b in group):
+            continue
+        first = next((b for b in group if b.text), None)
+        if first is not None and _salutation(first):
+            u = ctx.unit('letter', first, level='A')
+            first.role, first.unit, first.part, first.reason = 'letter', u, 'salutation', '信纸里的称谓'
+
+
 def detect(book: Book, an, decisions: dict | None = None) -> None:
     ctx = _Ctx(book, an)
+    detect_source_lists(ctx)
     detect_dl(ctx)
     detect_lists_of(ctx)
     detect_poems(ctx)
     detect_letters(ctx)
+    detect_letter_boxes(ctx)                  # 在书信识别之后：框里没认成信的，才按称谓补
     detect_lists(ctx)
     detect_tables(ctx)
     detect_glossary(ctx)

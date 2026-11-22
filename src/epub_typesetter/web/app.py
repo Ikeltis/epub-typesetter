@@ -17,7 +17,7 @@ from .. import __version__, board, engine, epubcheck, kindle, txtbook
 from ..llm.client import LLM, LLMError
 from ..llm.settings import LLMSettings
 from ..waivers import WaiverFileError, WaiverSet
-from . import jobs, preview, store
+from . import jobs, preview, reader, store
 
 MAX_UPLOAD = int(os.environ.get('EPUBTS_MAX_UPLOAD_MB', '300')) * 1024 * 1024
 CATEGORIES = {'STR': '结构', 'SEM': '语义', 'STY': '样式', 'TYP': '排版', 'TXT': '文本', 'RES': '资源',
@@ -269,6 +269,54 @@ def view_file(pid: str, which: str, inner: str):
     from fastapi.responses import Response
     _meta_or_404(pid)
     got = preview.read(pid, which, inner)
+    if got is None:
+        raise HTTPException(404, '包里没有这个文件')
+    data, mime = got
+    return Response(data, media_type=mime, headers={'Content-Security-Policy': preview.CSP,
+                                                    'X-Content-Type-Options': 'nosniff',
+                                                    'Cache-Control': 'private, max-age=600'})
+
+
+# ---------- 独立阅读器：直接打开任意 EPUB 看，不建项目、不做处理（reader.py） ----------
+
+@app.get('/api/reader')
+def reader_list():
+    return reader.list_all()
+
+
+@app.post('/api/reader', status_code=201)
+async def reader_open(file: UploadFile):
+    data = bytearray()
+    while chunk := await file.read(1024 * 1024):
+        data += chunk
+        if len(data) > MAX_UPLOAD:
+            raise HTTPException(413, f'文件超过 {MAX_UPLOAD // 1024 // 1024} MB')
+    try:
+        return reader.add(file.filename or 'book.epub', bytes(data))
+    except reader.NotEpub as e:
+        raise HTTPException(400, str(e)) from None
+
+
+@app.delete('/api/reader/{rid}', status_code=204)
+def reader_delete(rid: str):
+    if not reader.delete(rid):
+        raise HTTPException(404, '阅读器里没有这本书')
+
+
+@app.get('/api/reader/{rid}/spine')
+def reader_spine(rid: str):
+    items = preview.spine_file(reader.epub_path(rid))
+    if items is None:
+        raise HTTPException(404, '阅读器里没有这本书')
+    reader.touch(rid)
+    return items
+
+
+@app.get('/api/reader/{rid}/view/{inner:path}')
+def reader_view(rid: str, inner: str):
+    """同项目预览：按包内路径返回文件，书里的脚本不执行。"""
+    from fastapi.responses import Response
+    got = preview.read_file(reader.epub_path(rid), inner)
     if got is None:
         raise HTTPException(404, '包里没有这个文件')
     data, mime = got

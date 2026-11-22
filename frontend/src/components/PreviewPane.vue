@@ -4,9 +4,10 @@ import { ref, watch, computed } from 'vue'
 import { api } from '../api.js'
 
 const props = defineProps({
-  pid: { type: String, required: true },
-  options: { type: Array, required: true },          // [{ value: 'v3', label: '版本 3 …' }, …]
-  modelValue: { type: String, required: true },      // 当前版本
+  pid: { type: String, default: '' },                // 项目：pid + 版本
+  rid: { type: String, default: '' },                // 独立阅读器里的书：给了 rid 就不看 pid/版本
+  options: { type: Array, default: () => [] },       // [{ value: 'v3', label: '版本 3 …' }, …]；空则不显示选版本
+  modelValue: { type: String, default: '' },         // 当前版本
   width: { type: Number, default: 375 },
   height: { type: Number, default: 667 },
   theme: { type: String, default: 'day' },
@@ -21,7 +22,7 @@ const error = ref('')
 const frame = ref(null)
 const current = ref('')          // 预览框里实际打开的包内路径（点书里的链接后会变）
 
-const base = computed(() => `/api/books/${props.pid}/view/${props.modelValue}/`)
+const base = computed(() => props.rid ? `/api/reader/${props.rid}/view/` : `/api/books/${props.pid}/view/${props.modelValue}/`)
 const src = computed(() => spine.value[idx.value] ? base.value + encodePath(spine.value[idx.value].path) : 'about:blank')
 const encodePath = (p) => p.split('/').map(encodeURIComponent).join('/')
 
@@ -29,13 +30,13 @@ async function loadSpine() {
   error.value = ''
   try {
     const keep = spine.value[idx.value]?.title
-    spine.value = await api.spine(props.pid, props.modelValue)
+    spine.value = props.rid ? await api.readerSpine(props.rid) : await api.spine(props.pid, props.modelValue)
     // 换版本时尽量停在同名章节
     const i = keep ? spine.value.findIndex((s) => s.title === keep) : -1
     idx.value = i >= 0 ? i : Math.min(idx.value, Math.max(0, spine.value.length - 1))
   } catch (e) { spine.value = []; error.value = e.message }
 }
-watch(() => props.modelValue, loadSpine, { immediate: true })
+watch(() => [props.modelValue, props.rid], loadSpine, { immediate: true })
 
 // 模拟阅读器：页边距、强制改色（夜间、护眼）、字号缩放
 const THEMES = {
@@ -49,7 +50,8 @@ const THEMES = {
 function inject() {
   const doc = frame.value?.contentDocument
   if (!doc || !doc.documentElement) return
-  const path = decodeURIComponent((frame.value.contentWindow.location.pathname || '').split(`/view/${props.modelValue}/`)[1] || '')
+  const pathname = frame.value.contentWindow.location.pathname || ''
+  const path = pathname.startsWith(base.value) ? decodeURIComponent(pathname.slice(base.value.length)) : ''
   current.value = path
   const i = spine.value.findIndex((s) => s.path === path)
   if (i >= 0 && i !== idx.value) idx.value = i
@@ -70,7 +72,7 @@ const next = () => { if (idx.value < spine.value.length - 1) idx.value++ }
 
 <template>
   <div class="pane">
-    <div class="row bar">
+    <div v-if="options.length" class="row bar">
       <select :value="modelValue" @change="emit('update:modelValue', $event.target.value)">
         <option v-for="o in options" :key="o.value" :value="o.value">{{ o.label }}</option>
       </select>

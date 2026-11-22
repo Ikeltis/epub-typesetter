@@ -4,7 +4,8 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import PreviewPane from './PreviewPane.vue'
 
 const props = defineProps({
-  pid: { type: String, required: true },
+  pid: { type: String, default: '' },
+  rid: { type: String, default: '' },                // 独立阅读器：只看这一本，没有版本、不并排对比
   versions: { type: Array, default: () => [] },
   want: { type: String, default: '' },              // 外部指定要看的版本（下载列表里点「预览」）
   side: Boolean,                                     // 放在工作区右侧：高度随窗口，「桌面」宽度收窄，说明收进提示
@@ -60,11 +61,15 @@ const NOTE = '直接打开书里的章节文件渲染，和阅读器看到的一
       <button class="mono" @click="fontScale = 100">{{ fontScale }}%</button>
       <button @click="fontScale = Math.min(200, fontScale + 10)">A+</button>
     </div>
-    <label class="small"><input v-model="compare" type="checkbox" /> 并排对比</label>
+    <label v-if="!rid" class="small"><input v-model="compare" type="checkbox" /> 并排对比</label>
     <span v-if="side" class="muted small help" :title="NOTE">ⓘ</span>
   </div>
   <p v-if="!side" class="muted small">{{ NOTE }}</p>
-  <div class="panes" :class="{ two: compare }">
+  <div v-if="rid" class="panes">
+    <PreviewPane :rid="rid" :width="size[0]" :height="size[1]" :theme="theme" :font-scale="fontScale"
+                 :start="startChapter" />
+  </div>
+  <div v-else class="panes" :class="{ two: compare }">
     <PreviewPane v-if="compare" v-model="left" :pid="pid" :options="options" :width="size[0]" :height="size[1]"
                  :theme="theme" :font-scale="fontScale" :start="startChapter" />
     <PreviewPane v-model="right" :pid="pid" :options="options" :width="size[0]" :height="size[1]"

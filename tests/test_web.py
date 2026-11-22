@@ -151,3 +151,28 @@ def test_preview_spine_and_files(client):
     wait(client, pid, done=('fixed', 'error'))
     sp = client.get(f'/api/books/{pid}/spine/v1').json()
     assert sp[0]['title'] == '封面' and client.get(f'/api/books/{pid}/view/v1/{sp[1]["path"]}').status_code == 200
+
+
+def test_reader_open_view_delete(client):
+    """独立阅读器：打开一本 EPUB 直接看，不建项目；同一本书只存一份；不是 EPUB 的拒绝。"""
+    data = make_epub()
+    r = client.post('/api/reader', files={'file': ('看看.epub', data, 'application/epub+zip')})
+    assert r.status_code == 201
+    rid = r.json()['id']
+    assert client.get('/api/books').json() == []                         # 没有建项目
+    assert [m['id'] for m in client.get('/api/reader').json()] == [rid]
+    sp = client.get(f'/api/reader/{rid}/spine').json()
+    assert [s['path'] for s in sp] == ['OEBPS/Text/c1.xhtml', 'OEBPS/Text/c2.xhtml']
+    r = client.get(f'/api/reader/{rid}/view/OEBPS/Text/c1.xhtml')
+    assert r.status_code == 200 and "script-src 'none'" in r.headers['content-security-policy']
+    assert client.get(f'/api/reader/{rid}/view/..%2F..%2Freader/{rid}.json').status_code == 404
+    again = client.post('/api/reader', files={'file': ('同一本.epub', data, 'application/epub+zip')}).json()
+    assert again['id'] == rid and len(client.get('/api/reader').json()) == 1
+    assert client.post('/api/reader', files={'file': ('a.txt', b'hello', 'text/plain')}).status_code == 400
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w') as z:
+        z.writestr('a.txt', 'x')
+    assert client.post('/api/reader', files={'file': ('a.zip', buf.getvalue(), 'application/zip')}).status_code == 400
+    assert client.delete(f'/api/reader/{rid}').status_code == 204
+    assert client.get(f'/api/reader/{rid}/spine').status_code == 404
+    assert client.get('/api/reader/notanid/spine').status_code == 404

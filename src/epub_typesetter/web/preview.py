@@ -41,8 +41,12 @@ def _zip(path: str, mtime: float) -> zipfile.ZipFile:
 
 
 def read(pid: str, which: str, inner: str) -> tuple[bytes, str] | None:
-    """包内文件 → (内容, MIME)。路径不规范或不存在时返回 None。"""
-    p = epub_path(pid, which)
+    """项目某个版本的包内文件 → (内容, MIME)。路径不规范或不存在时返回 None。"""
+    return read_file(epub_path(pid, which), inner)
+
+
+def read_file(p: str | None, inner: str) -> tuple[bytes, str] | None:
+    """EPUB 文件 p 的包内文件 → (内容, MIME)；项目预览和独立阅读器共用。"""
     inner = posixpath.normpath(inner).lstrip('/')
     if p is None or inner.startswith('..') or inner in ('.', ''):
         return None
@@ -61,11 +65,13 @@ def _title_of(book: Book, path: str) -> str:
         root = book.tree(path).getroot()
     except Exception:
         return ''
+    from ..rebuild import _nav_label            # 与目录同一套取法：<br/> 处补空格，纯图片标题取 alt
     x = '{%s}' % NS['xhtml']
     for tag in ('h1', 'h2', 'h3', 'h4'):
         h = root.find(f'.//{x}body//{x}{tag}')
-        if h is not None and ''.join(h.itertext()).strip():
-            return re.sub(r'\s+', ' ', ''.join(h.itertext())).strip()[:40]
+        label = _nav_label(h) if h is not None else ''
+        if label:
+            return re.sub(r'\s+', ' ', label).strip()[:40]
     t = root.find(f'{x}head/{x}title')
     return (t.text or '').strip()[:40] if t is not None else ''
 
@@ -85,7 +91,10 @@ def _spine(path: str, mtime: float) -> list[dict]:
 
 
 def spine(pid: str, which: str) -> list[dict] | None:
-    p = epub_path(pid, which)
+    return spine_file(epub_path(pid, which))
+
+
+def spine_file(p: str | None) -> list[dict] | None:
     if p is None:
         return None
     return _spine(p, os.path.getmtime(p))

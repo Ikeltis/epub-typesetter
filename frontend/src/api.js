@@ -34,6 +34,15 @@ export const api = {
   testLlm: () => request('POST', '/api/settings/llm/test'),
   removeWaiver: (id, wid) => request('DELETE', `/api/books/${id}/waivers/${wid}`),
   downloadUrl: (id, which = 'fixed') => `/api/books/${id}/download?which=${which}`,
+  // 独立阅读器：直接打开任意 EPUB 看，不建项目
+  readerBooks: () => request('GET', '/api/reader'),
+  readerOpen(file) {
+    const fd = new FormData()
+    fd.append('file', file)
+    return request('POST', '/api/reader', fd)
+  },
+  readerRemove: (rid) => request('DELETE', `/api/reader/${rid}`),
+  readerSpine: (rid) => request('GET', `/api/reader/${rid}/spine`),
 }
 
 export const STATUS = {

@@ -43,6 +43,11 @@ KEEP_INLINE = {'a', 'b', 'strong', 'i', 'em', 'sup', 'sub', 'u', 's', 'del', 'in
                'kbd', 'samp', 'ruby', 'rt', 'rp', 'rb', 'small', 'time', 'var', 'dfn', 'mark', 'bdi', 'bdo', 'wbr',
                'br', 'img', 'span'}
 REMOVED_ROLES = {'toc', 'note-head', 'junk', 'cover', 'dropped'}
+# 信的各部分 → (类, epub:type)（04 §4.8）
+LETTER_PARTS = {'salutation-pre': ('salutation', 'z3998:salutation'), 'salutation': ('salutation', 'z3998:salutation'),
+                'valediction': (None, 'z3998:valediction'), 'closing': ('closing', 'z3998:valediction'),
+                'signature': ('signature', 'z3998:sender z3998:signature'), 'date': ('date', None),
+                'dateline': ('dateline', None), 'postscript': ('postscript', 'z3998:postscript'), 'body': (None, None)}
 TYPE_BY_TITLE = [
     (re.compile(r'^版权'), 'copyright-page', None),
     (re.compile(r'^(编辑手记|前言|序|序言|自序|推荐序|代序|引言|导言|导读|致读者|写在前面)'), 'preface', 'doc-preface'),
@@ -141,6 +146,122 @@ def _clean_ws(s: str) -> str:
     return re.sub(r'[ \t]*\n[\s]*', SOFT, s)
 
 
+_BR = object()
+_ORDINAL_END = re.compile(r'(第[一二三四五六七八九十百千零〇两\d]+[章回节卷部篇编集幕场折]|chapter\s*[\divxlc]+)\s*$', re.I)
+_CJK = re.compile(r'[　-〿㐀-鿿＀-￯]')
+
+
+def _nav_label(h: etree._Element) -> str:
+    """目录条目文字。标题里的 <br/>：章号之后换行（「第一章<br/>飞天扫帚的演变」）补一个全角空格，
+    中文长标题的折行（「阿不思·邓布利多<br/>的序言」）直接接上，西文之间补空格。
+    标题只有图片时用图片的 alt。"""
+    out = ''
+    pieces = list(_iter_text_br(h))
+    for k, p in enumerate(pieces):
+        if p is not _BR:
+            out += p
+            continue
+        before = out.rstrip()
+        nxt = next((x for x in pieces[k + 1:] if x is not _BR and x.strip()), '')
+        after = nxt.lstrip()
+        if not before or not after:
+            continue
+        if _ORDINAL_END.search(before):
+            out = before + '　'                    # 章号与章名之间一个全角空格（04 §4.3）
+        elif before != out or after != nxt:        # 源码在换行旁本来就空了一格（「尾声 <br/>十九年后」）
+            out = before + ' '
+        elif not (_CJK.match(before[-1]) and _CJK.match(after[0])):
+            out = before + ' '
+        else:
+            out = before
+    label = re.sub(r'[ \t\r\n]*　[ \t\r\n]*', '　', squash(out))   # 换行后源码的缩进空白不跟在全角空格旁
+    if not label:
+        label = next((squash(i.get('alt') or '') for i in h.iter(X + 'img') if (i.get('alt') or '').strip()), '')
+    return label
+
+
+def _iter_text_br(el: etree._Element):
+    """同 itertext()，但 <br/> 处产出 _BR 标记；注号（a.noteref）的编号不算标题文字。"""
+    if el.text:
+        yield el.text
+    for c in el:
+        if isinstance(c.tag, str):
+            if c.tag == X + 'br':
+                yield _BR
+            elif 'noteref' in (c.get('class') or '').split():
+                pass
+            else:
+                yield from _iter_text_br(c)
+        if c.tail:
+            yield c.tail
+
+
+def _drop_keep_tail(node: etree._Element) -> None:
+    """删掉元素，它后面的文字（tail）接到前一个兄弟或父元素的文字上。"""
+    parent = node.getparent()
+    prev = node.getprevious()
+    if node.tail:
+        if prev is not None:
+            prev.tail = (prev.tail or '') + node.tail
+        else:
+            parent.text = (parent.text or '') + node.tail
+    parent.remove(node)
+
+
+def _unwrap(node: etree._Element) -> None:
+    """拆掉元素外壳，里面的文字和子元素留在原处。"""
+    parent = node.getparent()
+    idx = list(parent).index(node)
+    prev = node.getprevious()
+    if node.text:
+        if prev is not None:
+            prev.tail = (prev.tail or '') + node.text
+        else:
+            parent.text = (parent.text or '') + node.text
+    kids = list(node)
+    for k, c in enumerate(kids):
+        parent.insert(idx + k, c)
+    last = kids[-1] if kids else None
+    if node.tail:
+        if last is not None:
+            last.tail = (last.tail or '') + node.tail
+        elif prev is not None:
+            prev.tail = (prev.tail or '') + node.tail
+        else:
+            parent.text = (parent.text or '') + node.tail
+    parent.remove(node)
+
+
+def _tidy_breaks(e: etree._Element) -> None:
+    """移走题图后清理标题里的换行：连续的 <br/> 只留一个，开头、结尾的 <br/> 去掉，换行两旁的源码空白去掉。"""
+    ws = ' \t\r\n'
+    changed = True
+    while changed:
+        changed = False
+        kids = list(e)
+        for k, c in enumerate(kids):
+            if c.tag != X + 'br':
+                continue
+            before_blank = (c.getprevious() is None and not (e.text or '').strip(ws)) or \
+                (c.getprevious() is not None and c.getprevious().tag == X + 'br'
+                 and not (c.getprevious().tail or '').strip(ws))
+            after_blank = k == len(kids) - 1 and not (c.tail or '').strip(ws)
+            if before_blank or after_blank:
+                _drop_keep_tail(c)
+                changed = True
+                break
+    for c in e.findall(X + 'br'):
+        if c.tail:
+            c.tail = c.tail.lstrip(ws)
+        prev = c.getprevious()
+        if prev is not None and prev.tail:
+            prev.tail = prev.tail.rstrip(ws)
+        elif prev is None and e.text:
+            e.text = e.text.rstrip(ws)
+    if e.text:
+        e.text = e.text.lstrip(ws)
+
+
 def _resolve_soft(dst: etree._Element) -> None:
     """SOFT 两侧（跨标签看）有汉字或全角标点就删掉，两侧都是西文才变一个空格。"""
     order = []
@@ -237,10 +358,60 @@ class Rebuilder:
                 chapter_level += 1
         part_level = chapter_level - 1 if chapter_level > 1 and any(
             h.level == chapter_level - 1 and PART_RE.match(h.text) for h in heads) else None
+        # 不叫「第X部/卷」的部：合集里的各册（「Ⅰ 哈利·波特与魔法石」，标题里没有「第X部」）。
+        # 章的上一级标题里，至少两个各自管着不止一个「第X章/回」，就按结构认作部；
+        # 部的范围（到下一个同级标题为止）里的尾声、后记等也归这一部，不再跳出来与部并列。
+        # 同一级里管着别的标题、但不是「第X章」的（剧本的「第一幕」、附录下的几本小书）：
+        # 不算部，本身作章，下面的标题降一级作节，仍嵌在它下面
+        struct_part: dict[int, int] = {}          # 部标题块序号 → 范围终点（下一个同级或更高标题的块序号）
+        struct_chap: dict[int, int] = {}          # 作章的容器标题 → 范围终点
+        if chapter_level > 1:
+            up = chapter_level - 1
+            for k, h in enumerate(heads):
+                if h.level != up or h.attrs.get('force') or PART_RE.match(h.text):
+                    continue
+                end = next((x for x in heads[k + 1:] if x.level <= up), None)
+                inner = heads[k + 1:heads.index(end) if end is not None else len(heads)]
+                stop = end.idx if end is not None else len(self.an.blocks)
+                if sum(1 for x in inner if x.level == chapter_level and CHAPTER_ONLY_RE.match(x.text)) >= 2:
+                    struct_part[h.idx] = stop
+                elif any(x.level == chapter_level for x in inner):
+                    struct_chap[h.idx] = stop
+            if len(struct_part) < 2:
+                struct_part, struct_chap = {}, {}
+        def span_end(k: int, lv: int) -> int:
+            """heads[k] 的范围终点：下一个原层级不低于 lv 的标题。"""
+            nxt = next((x for x in heads[k + 1:] if x.attrs.get('level0', x.level) <= lv), None)
+            return nxt.idx if nxt is not None else len(self.an.blocks)
+
+        part_end = -1
+        chap_end = -1                             # 在作章的容器范围里：其下标题降一级
+        chap_lv, chap_n = 0, 2                    # 容器的原层级、输出的 h 数字
         in_part = False
         cur_n = 2
-        for h in heads:
+        for k, h in enumerate(heads):
             force = h.attrs.get('force')                # 确认板上用户指定的部、章、节
+            lv0 = h.attrs.get('level0', h.level)
+            # 用户把与部同级的标题（合集里的第八册）指定为章：并进前一部，原来管着的标题随它降一级
+            container = force == 'chapter' and lv0 < chapter_level
+            if in_part and part_end >= 0 and h.idx >= part_end:   # 出了结构部的范围
+                if container:
+                    part_end = -1
+                else:
+                    in_part, part_end = False, -1
+            if chap_end >= 0 and h.idx >= chap_end:
+                chap_end = -1
+            if h.idx in struct_chap:
+                in_part, part_end, cur_n = False, -1, 2
+                self.head_out[h.idx] = (2, 'chapter-title', 'chapter')
+                chap_end, chap_lv, chap_n = struct_chap[h.idx], chapter_level - 1, 2
+                continue
+            if chap_end >= 0 and not force:
+                depth = h.level - chap_lv
+                cls = {1: 'section-title', 2: 'subsection-title'}.get(depth)
+                # 直接下级仍单独成文件（附录里的整本百科全书、剧本各幕都很长），只是层级是节
+                self.head_out[h.idx] = (min(chap_n + depth, 6), cls, 'chapter' if depth == 1 else 'sub')
+                continue
             if force == 'part':
                 self.head_out[h.idx] = (2, 'part-title', 'part')
                 in_part, cur_n = True, 2
@@ -249,15 +420,20 @@ class Rebuilder:
             elif force == 'chapter':
                 cur_n = 3 if in_part else 2
                 self.head_out[h.idx] = (cur_n, 'chapter-title', 'chapter')
+                if container:
+                    chap_end, chap_lv, chap_n = span_end(k, lv0), lv0, cur_n
             elif force == 'section':
                 self.head_out[h.idx] = (min(cur_n + 1, 6), 'section-title', 'sub')
             elif part_level is not None and h.level == part_level and PART_RE.match(h.text):
                 self.head_out[h.idx] = (2, 'part-title', 'part')
-                in_part, cur_n = True, 2
+                in_part, cur_n, part_end = True, 2, -1
+            elif h.idx in struct_part:
+                self.head_out[h.idx] = (2, 'part-title', 'part')
+                in_part, cur_n, part_end = True, 2, struct_part[h.idx]
             elif h.level <= chapter_level:
                 special = any(rx.match(h.text) for rx, t, _ in TYPE_BY_TITLE)   # 前言、后记等不属于部
-                if special:
-                    in_part = False
+                if special and part_end < 0 or h.level < chapter_level:
+                    in_part, part_end = False, -1
                 cur_n = 3 if in_part else 2
                 self.head_out[h.idx] = (cur_n, 'chapter-title', 'chapter')
             else:
@@ -478,6 +654,11 @@ class Rebuilder:
         st = _style_of(el, self.classes)
         cls = []
         size = _size_level(st.get('font-size', ''))
+        # 首字下沉（.first{float:left; font-size:2em; 黑体; 加粗; 色}）：放大和浮动重建不保留，
+        # 剩下的字体、颜色、加粗只落在段首一个字上，像排错了——整组都是装饰，按正文字输出
+        if st.get('float', '').strip() in ('left', 'right') and size is not None and size > 3 \
+                and len(squash(''.join(el.itertext()))) <= 2:
+            return [], False, False
         if size is not None and size < 3:
             cls.append('small')
         ff = st.get('font-family', '')
@@ -521,6 +702,8 @@ class Rebuilder:
         """把 src 的行内内容（不含 src 自身标签）规范化后追加进 dst。
         plain=True：去掉一切行内样式（标题）；sized=True：字号由块的角色样式决定，不再输出 small（图注、出处、注文）。"""
         state = {'strip': strip_prefix}
+        # 图片字只在有文字的块里才成立；整块只有图（只含一张手写批注图的注释）时按原大小显示
+        has_text = bool(''.join(src.itertext()).strip())
 
         def add_text(parent, text):
             text = _clean_ws(text)
@@ -569,7 +752,7 @@ class Rebuilder:
             if ch.get('id') and not (tag in KEEP_INLINE and tag != 'span'):
                 d.append(_el('span', {'id': ch.get('id')}))
             if tag in ('img', 'svg'):
-                glyph = tag == 'img' and self._is_glyph(ch)
+                glyph = tag == 'img' and has_text and self._is_glyph(ch)
                 e = copy.deepcopy(ch)
                 e.tail = None                  # deepcopy 会带上 tail；tail 由外层 walk 统一追加，否则文字重复
                 _clean_media(e)
@@ -651,6 +834,45 @@ class Rebuilder:
         else:
             e.text = b.attrs['title']
 
+    @staticmethod
+    def _title_from_attr(e: etree._Element, title: str) -> None:
+        """原标题的字只在 title 属性里：标题是图片（书名画在图上）就把文字写进图片 alt，
+        图片照常显示，读屏和目录都能读到；没有图片（字画在背景图上）就直接输出文字。"""
+        img = next((x for x in e.iter(X + 'img')), None)
+        if img is not None:
+            img.set('alt', title)
+            return
+        for br in list(e.iter(X + 'br')):        # <h2 title="书名"><br/></h2> 里只剩换行
+            br.getparent().remove(br)
+        e.text = title
+
+    @staticmethod
+    def _title_images_out(e: etree._Element) -> list:
+        """标题里夹着题图（「第2章<br/><img/><br/>悄悄消失的玻璃」）：图移出标题，
+        标题只留文字（章号、换行、章名），图各自成一个居中的 figure 放在标题下方。
+        只有图、没有字的标题（书名画在图上）不动；图片字（.glyph）是文字的一部分，不动。"""
+        if not ''.join(e.itertext()).strip():
+            return []
+        imgs = [x for x in e.iter(X + 'img') if 'glyph' not in (x.get('class') or '').split()]
+        out = []
+        for img in imgs:
+            node = img                                # 只包着这张图的空壳（如指回目录的 <a>）一起移走
+            while node.getparent() is not e and not ''.join(node.getparent().itertext()).strip() \
+                    and len(node.getparent()) == 1:
+                node = node.getparent()
+            _drop_keep_tail(node)
+            for k in ('width', 'height', 'style'):
+                img.attrib.pop(k, None)
+            if (img.get('alt') or '').strip().lower() in ('alt', 'img', 'image'):
+                img.set('alt', '')                    # 占位 alt：题图是装饰
+            fig = _el('figure')
+            fig.append(img)
+            img.tail = None
+            out.append(fig)
+        if out:
+            _tidy_breaks(e)
+        return out
+
     def _only_noteref(self, el) -> bool:
         """el 不是注号本身，但里面有注号，且除注号文字外没有别的文字。"""
         if id(el) in self.noteref_els:
@@ -700,9 +922,20 @@ class Rebuilder:
                 sec.set('role', ch.role)
         blocks = ch.blocks
         i = 0
+        out, cur_box = sec, None                      # out：当前往里放的容器（信纸框里就是框）
         while i < len(blocks):
             b = blocks[i]
             self.cur_doc = b.doc
+            box_id = b.attrs.get('letter_box')
+            if box_id != cur_box:                     # 进出信纸框
+                cur_box = box_id
+                out = sec if box_id is None else self._letter_box(sec, blocks, i)
+            if box_id is not None and b.role == 'letter':   # 框里的信件各部分：直接成段，不再套一层信
+                out.append(self._letter_part(b))
+                i += 1
+                continue
+            if box_id is not None and b.role == 'quote':    # 信里不再嵌 blockquote（04 4.8.1.3）
+                b.role = 'para'
             if b.role == 'heading-merged':            # 已并入相邻标题
                 i += 1
                 continue
@@ -718,13 +951,14 @@ class Rebuilder:
                 b.role = 'para'                       # 没被引用的注（孤注）：按普通段落保留
             if b.role in ('poem', 'letter', 'ol', 'dl', 'gloss') and b.unit >= 0:
                 j = i
-                while j < len(blocks) and blocks[j].unit == b.unit and blocks[j].role == b.role:
+                while j < len(blocks) and blocks[j].unit == b.unit and blocks[j].role == b.role \
+                        and blocks[j].attrs.get('letter_box') == box_id:
                     j += 1
-                sec.append(getattr(self, f'_render_{b.role}')(blocks[i:j]))
+                out.append(getattr(self, f'_render_{b.role}')(blocks[i:j]))
                 i = j
                 continue
             if b.role == 'loi-head':
-                sec.append(self._render_list_of(blocks[i:], ch))
+                out.append(self._render_list_of(blocks[i:], ch))
                 i += 1
                 while i < len(blocks) and blocks[i].role == 'loi-entry':
                     i += 1
@@ -764,19 +998,19 @@ class Rebuilder:
                 for img in fig.iter(X + 'img'):
                     if img.get('alt') is None:
                         img.set('alt', '')
-                sec.append(fig)
+                out.append(fig)
                 i = j
                 continue
             if b.role in ('bullet', 'quote'):
                 wrap = _el('ul', {'class': 'bullets'}) if b.role == 'bullet' else _el('blockquote')
-                while i < len(blocks) and blocks[i].role == b.role:
+                while i < len(blocks) and blocks[i].role == b.role and blocks[i].attrs.get('letter_box') == box_id:
                     self.cur_doc = blocks[i].doc
                     item = _el('li' if b.role == 'bullet' else 'p')
                     self.inline(blocks[i].el, item, BULLET_RE if b.role == 'bullet' else None)
                     self._anchors(blocks[i], item)
                     wrap.append(item)
                     i += 1
-                sec.append(wrap)
+                out.append(wrap)
                 continue
             if b.role == 'keep' or b.role == 'figure' and _local(b.el.tag) == 'figure':
                 e = copy.deepcopy(b.el)
@@ -801,14 +1035,14 @@ class Rebuilder:
                 if b.role == 'keep':                  # 链接改写之后再收表题（表题的链接已由 inline 改写过）
                     self._render_tables(b, e, blocks[i - 1] if i else None)
                 self._anchors(b, e)
-                sec.append(e)
+                out.append(e)
                 i += 1
                 if i < len(blocks) and blocks[i].role == 'table-note' and blocks[i].group == b.idx:
                     note = _el('p', {'class': 'table-note'})
                     self.cur_doc = blocks[i].doc
                     self.inline(blocks[i].el, note, sized=True)
                     self._anchors(blocks[i], note)
-                    sec.append(note)
+                    out.append(note)
                     i += 1
                 continue
             if b.role == 'heading':
@@ -821,7 +1055,7 @@ class Rebuilder:
             elif b.role in ('dialogue', 'stage'):     # 剧本（用户确认后，04 §4.9 写法 B）
                 e = self._script_para(b)
                 self._anchors(b, e)
-                sec.append(e)
+                out.append(e)
                 i += 1
                 continue
             elif b.role == 'item':                    # 中文序号项（04 4.10.2）
@@ -839,13 +1073,17 @@ class Rebuilder:
                     no.tail = '\u3000' + rest
                     e.insert(0, no)
                 self._anchors(b, e)
-                sec.append(e)
+                out.append(e)
                 i += 1
                 continue
             else:
                 cls = {'source': 'source', 'meta': 'meta', 'right': 'align-right', 'center': 'align-center'}
                 e = _el('p', {'class': cls.get(b.role)})
-            if b.role == 'heading' and b.attrs.get('title'):   # 确认板上改写的标题
+            if b.role == 'heading' and b.attrs.get('title') and b.attrs.get('src_title') \
+                    and b.el.find('.//' + X + 'img') is not None:  # 改写图片标题：图保留，新文字进 alt
+                self.inline(b.el, e, plain=True)
+                self._title_from_attr(e, b.attrs['title'])
+            elif b.role == 'heading' and b.attrs.get('title'):   # 确认板上改写的标题
                 self._retitle(b, e)
             elif b.role == 'heading' and b.merged >= 0:     # 章号与章名两个标题合并：「第一回　章名」
                 other = self.an.blocks[b.merged]
@@ -862,8 +1100,12 @@ class Rebuilder:
                 self.inline(b.el, e, plain=b.role == 'heading', sized=b.role in ('caption', 'source'))
                 if b.role == 'heading' and e.text:            # 章号与章名之间统一为一个全角空格（04 §4.3）
                     e.text = ORDINAL_SEP_RE.sub('\\1\u3000', e.text, count=1)
+            if b.role == 'heading' and b.attrs.get('src_title') and not ''.join(e.itertext()).strip():
+                self._title_from_attr(e, b.attrs.get('title') or b.attrs['src_title'])
+            moved = self._title_images_out(e) if b.role == 'heading' else []
             self._anchors(b, e)
-            sec.append(e)
+            out.append(e)
+            out.extend(moved)                         # 标题里的题图：放在标题下方，单独居中
             i += 1
         if ch.epub_type == 'glossary':
             for dl in sec.iter(X + 'dl'):
@@ -971,17 +1213,29 @@ class Rebuilder:
         self.tpl_used.add('letter')
         self.rep.structures[('书信', 'B')] += 1
         box = _el('blockquote', {'class': 'letter', EPUB + 'type': 'z3998:letter'})
-        spec = {'salutation-pre': ('salutation', 'z3998:salutation'), 'salutation': ('salutation', 'z3998:salutation'),
-                'valediction': (None, 'z3998:valediction'), 'closing': ('closing', 'z3998:valediction'),
-                'signature': ('signature', 'z3998:sender z3998:signature'), 'date': ('date', None),
-                'dateline': ('dateline', None), 'postscript': ('postscript', 'z3998:postscript'), 'body': (None, None)}
         for b in group:
-            cls, et = spec.get(b.part, (None, None))
-            e = _el('p', {'class': cls, EPUB + 'type': et})
-            self.cur_doc = b.doc
-            self.inline(b.el, e)
-            self._anchors(b, e)
-            box.append(e)
+            box.append(self._letter_part(b))
+        return box
+
+    def _letter_part(self, b: Block) -> etree._Element:
+        """信的一部分（称谓、正文、祝颂、署名、日期、附言）：各自成段，带类和 z3998 语义（04 §4.8）。"""
+        cls, et = LETTER_PARTS.get(b.part, (None, None))
+        e = _el('p', {'class': cls, EPUB + 'type': et})
+        self.cur_doc = b.doc
+        self.inline(b.el, e)
+        self._anchors(b, e)
+        return e
+
+    def _letter_box(self, sec: etree._Element, blocks: list[Block], i: int) -> etree._Element:
+        """原书的信纸框（semantic/structures 记的 letter_box）：整框一个 blockquote.letter，书信的样式和字体。
+        框里有称谓才是一封信，才标 z3998:letter（04 4.8.1.4）；入学用品清单、魔法部令这类只借用书信的样式。"""
+        k = blocks[i].attrs['letter_box']
+        group = [b for b in blocks[i:] if b.attrs.get('letter_box') == k]
+        is_letter = any(b.role == 'letter' and b.part in ('salutation', 'salutation-pre') for b in group)
+        box = _el('blockquote', {'class': 'letter', EPUB + 'type': 'z3998:letter' if is_letter else None})
+        self.tpl_used.add('letter')
+        self.rep.structures[('书信' if is_letter else '信纸（文书）', 'B')] += 1
+        sec.append(box)
         return box
 
     def _render_ol(self, group: list[Block]) -> etree._Element:
@@ -1154,6 +1408,13 @@ class Rebuilder:
             li = etree.SubElement(ol, X + 'li', {'id': f'note-{num}'})
             p = etree.SubElement(li, X + 'p')
             body_src = copy.deepcopy(b.el)
+            # 注文整段包在指回原注号的链接里（<p id="fn1"><a href="#n1">注文</a></p>，注号是图片的书常见）：
+            # 链接拆掉、文字留下；回链由下面统一的 ↩ 提供
+            ref_ids = {a.get('id') for a in self.an.noterefs.get(b.idx, []) if a.get('id')}
+            for a in list(body_src.iter(X + 'a')):
+                if (a.get('href') or '').partition('#')[2] in ref_ids and \
+                        not NOTE_LABEL_RE.fullmatch(re.sub(r'\s+', '', ''.join(a.itertext())) or 'x'):
+                    _unwrap(a)
             # 去掉原来的「[n]」回链（编号由 ol 自动生成）；几处注号共用一条注文时开头是「[1][2][3]」，都去掉
             for a in list(body_src.iter(X + 'a')):
                 before = (a.getparent().text or '') if a.getprevious() is None else (a.getprevious().tail or '')
@@ -1242,6 +1503,7 @@ class Rebuilder:
             self.rep.log.append('追加模板样式：' + '、'.join(n for n in TEMPLATE_ORDER if n in self.tpl_used))
         self.rep.suggestions = self.an.suggestions + self.rep.suggestions
         book.add_item(self.css_path, 'text/css', item_id='typesetter-css', data=css)
+        self._drop_vendor(css)
 
         # 封面页
         cover_item = next((i for i in book.manifest() if 'cover-image' in i.properties), None)
@@ -1281,6 +1543,51 @@ class Rebuilder:
         self.rep.log.append(f'重建 {len(chapters)} 个文件，注释 {self.rep.notes} 条，删除 {len(self.rep.removed)} 块')
         return self.rep
 
+    def _drop_vendor(self, css: bytes) -> None:
+        """去掉阅读器专用的东西（多看、Apple Books、Kindle、掌阅……），成品只留标准 EPUB：
+        - 旧样式表删了之后没人引用的字体（原书给多看等配的字体；主题不嵌字体）
+        - encryption.xml 里指向已删文件的条目（多看加密的 dkagent.css 等），条目删光就删整个文件
+        - OPF 里的私有 meta（duokan-body-font、ibooks:*），以及 Apple 的 display-options 文件
+        - 唯一标识 id 带厂商名的（duokan-book-id）改成中性名"""
+        book = self.book
+        css_text = css.decode('utf-8', 'replace')
+        for it in list(book.manifest()):
+            if (it.media_type.startswith('font/') or 'font' in it.media_type or 'opentype' in it.media_type) \
+                    and posixpath.basename(it.path) not in css_text:
+                it.element.getparent().remove(it.element)
+                book.delete(it.path)
+                self.rep.log.append(f'删除未引用的字体 {posixpath.basename(it.path)}')
+        enc_path = 'META-INF/encryption.xml'
+        if enc_path in book.files:
+            root = etree.fromstring(book.files[enc_path])
+            ENC = '{http://www.w3.org/2001/04/xmlenc#}'
+            for ed in list(root.iter(ENC + 'EncryptedData')):
+                ref = ed.find(f'.//{ENC}CipherReference')
+                if ref is None or ref.get('URI', '').lstrip('/') not in book.files:
+                    ed.getparent().remove(ed)
+            if root.find(f'.//{ENC}EncryptedData') is None:
+                book.delete(enc_path)
+                self.rep.log.append('删除 encryption.xml（加密的文件都已不在书里）')
+            else:
+                book.set_bytes(enc_path, etree.tostring(root, xml_declaration=True, encoding='utf-8'))
+        book.delete('META-INF/com.apple.ibooks.display-options.xml')
+        vendor = re.compile(r'^(duokan|ibooks:|zhangyue|ireader|amzn|kindle|kobo)', re.I)
+        meta_parent = book.opf.find('opf:metadata', NS)
+        for m in list(meta_parent.iter('{%s}meta' % NS['opf'])) if meta_parent is not None else []:
+            if vendor.match(m.get('name') or '') or vendor.match(m.get('property') or ''):
+                m.getparent().remove(m)
+                self.rep.log.append(f'删除阅读器专用 meta {m.get("name") or m.get("property")}')
+        uid = book.opf.get('unique-identifier') or ''
+        if vendor.match(uid):
+            for e in book.opf.iter():
+                if isinstance(e.tag, str):
+                    if e.get('id') == uid:
+                        e.set('id', 'pub-id')
+                    if e.get('refines') == '#' + uid:
+                        e.set('refines', '#pub-id')
+            book.opf.set('unique-identifier', 'pub-id')
+        book.mark_dirty(book.opf_path)
+
     def _rebuild_nav(self, trees, has_cover: bool) -> None:
         book = self.book
         entries = []
@@ -1288,7 +1595,7 @@ class Rebuilder:
             heads = [h for h in html.iter(X + 'h2', X + 'h3', X + 'h4')
                      if set((h.get('class') or '').split()) & {'part-title', 'chapter-title', 'section-title'}]
             for k, h in enumerate(heads):
-                entries.append(Entry(int(h.tag[-1]) - 1, squash(''.join(h.itertext())), ch.path,
+                entries.append(Entry(int(h.tag[-1]) - 1, _nav_label(h), ch.path,
                                      '' if k == 0 else h.get('id')))
         chapters = [ch for ch, _ in trees]
         if not entries and chapters:                  # 全书没有标题：至少给一条指向正文开头

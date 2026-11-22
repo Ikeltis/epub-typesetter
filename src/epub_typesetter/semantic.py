@@ -29,7 +29,7 @@ from lxml import etree
 
 from .book import NS, Book
 from .nav import entries_from_ncx
-from .xhtml import X, css_paths, is_external, squash
+from .xhtml import HEADINGS, X, css_paths, is_external, squash
 
 BLOCK_TAGS = {X + t for t in ('p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'li', 'dt', 'dd', 'div',
                               'figcaption', 'pre', 'table', 'figure', 'section', 'article', 'aside',
@@ -221,6 +221,26 @@ def _indent_of(book: Book, el) -> float:
     return indent_width(m.group(1)) if m else book.removed_indent.get(el, 0)
 
 
+_BG_URL = re.compile(r'background(?:-image)?\s*:[^;]*?url\(\s*["\']?([^"\')]+)["\']?\s*\)', re.I)
+_BG_MAX_TEXT = 40          # 背景上的字不超过一行标题，才算「整页图」（扉页、分册封面）
+
+
+def _background_as_img(book: Book, doc: str, body) -> None:
+    """整页图常写成 body/div 的内联背景图（<body style="background: url(cover.jpg)">），
+    重建不保留内联样式，图会整张丢掉。页面上几乎没有文字时，在页末补一个 <img>，按普通插图输出。
+    只认内联样式：样式表里的背景多是纹理、花边，不是内容。（只在重建前调用，改的树随后整体重写。）"""
+    for el in [body] + [d for d in body.iter(X + 'div')]:
+        m = _BG_URL.search(el.get('style') or '')
+        if not m or len(squash(''.join(body.itertext()))) > _BG_MAX_TEXT:
+            continue
+        href = m.group(1).strip()
+        if is_external(href) or Book.resolve(doc, href) not in book.files:
+            continue
+        if any(Book.resolve(doc, i.get('src') or '') == Book.resolve(doc, href) for i in body.iter(X + 'img')):
+            continue
+        etree.SubElement(body, X + 'img', {'src': href, 'alt': ''})
+
+
 def extract_blocks(book: Book) -> list[Block]:
     classes = class_styles(book)
     blocks: list[Block] = []
@@ -231,6 +251,7 @@ def extract_blocks(book: Book) -> list[Block]:
         body = root.find(X + 'body')
         if body is None:
             continue
+        _background_as_img(book, it.path, body)
         # 链接可能指向文件本身（body/html 上的 id），它们归属文件的第一块
         pending: list[str] = [x for x in (root.get('id'), body.get('id')) if x]
         gap = [False]
@@ -247,12 +268,21 @@ def extract_blocks(book: Book) -> list[Block]:
                     size, bold, align = _visual(ch, classes)
                     has_media = any(isinstance(d.tag, str) and _local(d.tag) in ('img', 'svg', 'image')
                                     for d in ch.iter())
+                    # 标题文字只写在 title 属性里（<h1 title="Ⅰ 书名"><img/></h1>、<h2 title="书名"><br/></h2>，
+                    # 字画在图片或背景图上）：取 title 作标题文字，否则目录条目为空、甚至整个标题丢失
+                    src_title = squash(ch.get('title') or '') if not text and ch.tag in HEADINGS else ''
+                    if src_title:
+                        text = src_title
                     if not text and not has_media and ch.tag not in ATOMIC:
                         pending.extend(ids)       # 空块（如 <p id=x/>）当锚点用
                         gap[0] = True
                         continue
                     blocks.append(Block(len(blocks), it.path, ch, text, pending + ids, size, bold, align,
                                         indent=_indent_of(book, ch), gap_before=gap[0]))
+                    if src_title:
+                        blocks[-1].attrs['src_title'] = src_title
+                        if has_media:            # 重建时文字写进图片 alt，正文里看不到：不按文字核对
+                            blocks[-1].verify = ''
                     pending.clear()
                     gap[0] = False
                 elif _is_block(ch):
@@ -376,6 +406,8 @@ def apply_block_roles(blocks: list[Block], heads: dict[str, str], matter: dict[s
         k = keys[b.idx]
         role = heads.get(k)
         if role in ('part', 'chapter', 'section', 'subsection') and b.role in REASSIGNABLE + ('heading',):
+            if b.role == 'heading':
+                b.attrs['level0'] = b.level          # 原层级：降级的标题带着它下面的标题一起降（rebuild）
             b.role, b.level, b.attrs['force'] = 'heading', {'part': 1, 'chapter': 1}.get(role, 2), role
             b.reason = f'用户确认：{role}'
         elif role == 'para' and b.role == 'heading':
@@ -407,7 +439,8 @@ def apply_titles(blocks: list[Block], titles: dict[str, str]) -> None:
         if not t or b.role != 'heading':
             continue
         b.attrs['title'] = t
-        b.verify = t
+        # 标题是图片、字只在 title 属性里：新文字写进图片 alt（图照常显示），正文里看不到，不按文字核对
+        b.verify = '' if b.attrs.get('src_title') and b.el.find('.//' + X + 'img') is not None else t
         if b.merged >= 0:                     # 并入的章号（或章名）块已含在新文字里
             blocks[b.merged].verify = ''
 
@@ -472,6 +505,9 @@ def analyze(book: Book, decisions: dict | None = None) -> Analysis:
             continue
         if in_toc and (_link_only(b.el) or not b.text):
             b.role, b.reason = 'toc', '目录页条目'
+        elif in_toc and len(b.text) <= 20 and (nxt := next((x for x in blocks[b.idx + 1:] if x.text), None)) \
+                is not None and nxt.role != 'heading' and _link_only(nxt.el):
+            b.role, b.reason = 'toc', '目录页里的分组行'     # 「第一部」+ 装饰图，后面接着还是目录条目
         else:
             in_toc = False
 
@@ -538,23 +574,31 @@ def analyze(book: Book, decisions: dict | None = None) -> Analysis:
                 return bool(re.fullmatch(r'(\[\d{1,3}\]|［\d{1,3}］|\d{1,3}[.．]?|[①-⑳]|\s)*', lead))
         return False
     for b in blocks:
-        if b.role in ('toc', 'heading'):
+        if b.role == 'toc':
             continue
         for a in b.el.iter(X + 'a'):
             label = _norm(''.join(a.itertext()))
             href = a.get('href', '')
             if not href or is_external(href) or '#' not in href or len(label) > 6:
                 continue
+            # 标题里的链接多是目录式跳转；只有明确的注号（标了 noteref，或注号是一张图）才配对
+            if b.role == 'heading' and 'noteref' not in (a.get('{%s}type' % NS['epub']) or '') \
+                    and not (not label and a.find('.//' + X + 'img') is not None):
+                continue
             target = by_anchor.get((Book.resolve(b.doc, href), href.partition('#')[2]))
             if target is None or target is b:
                 continue
             labelled = NOTE_LABEL_RE.fullmatch(label or 'x') and _norm(target.text).startswith(label)
-            mutual = (NOTE_LABEL_RE.fullmatch(label or 'x') or re.fullmatch(r'\d{1,3}[.．]?|\*{1,3}|†', label or 'x')) \
-                and links_back(target, b.doc, a.get('id'))
+            # 注号是一张小图（<a href="#fn1" id="n1"><img alt="note1"/></a>）：没有文字，只认互相链接
+            img_ref = not label and a.find('.//' + X + 'img') is not None
+            mutual = (NOTE_LABEL_RE.fullmatch(label or 'x') or re.fullmatch(r'\d{1,3}[.．]?|\*{1,3}|†', label or 'x')
+                      or img_ref) and links_back(target, b.doc, a.get('id'))
             if not (labelled or mutual):
                 continue
-            target.role, target.reason = 'note', f'被正文注号 {label} 指向'
+            target.role, target.reason = 'note', f'被正文注号 {label or "（图片）"} 指向'
             noterefs.setdefault(target.idx, []).append(a)
+            if img_ref:            # 重建时注号图换成编号：图片计数不算它（textcheck）
+                b.attrs['noteref_imgs'] = b.attrs.get('noteref_imgs', 0) + sum(1 for _ in a.iter(X + 'img'))
     # 配上的注号在重建时换成新编号：文字校验不算原注号的字（[n] 已由校验本身归一，裸数字注号要在这里去掉）
     ref_ids = {id(a) for refs in noterefs.values() for a in refs}
     for b in blocks:
@@ -580,7 +624,9 @@ def analyze(book: Book, decisions: dict | None = None) -> Analysis:
         while j < len(blocks):
             nb = blocks[j]
             if nb.doc != b.doc or nb.role != 'para' and nb.role != 'quote' or nb.size != b.size \
+                    or not nb.text \
                     or NOTE_LABEL_RE.match(nb.text) or _norm(nb.text) in NOTE_TITLES:
+                # 没有字的块（插图、「返回索引」小图标）不是注文续段
                 break
             nb.role, nb.group, nb.reason = 'note-cont', b.idx, '注释的续段'
             j += 1
@@ -643,6 +689,66 @@ def analyze(book: Book, decisions: dict | None = None) -> Analysis:
         first = next((b for b in blocks if b.role != 'cover'), None)
         if first is not None and is_cover(first) and first.idx < 3:
             first.role, first.reason = 'cover', '全书开头的封面图（重建时另生成标准封面页）'
+
+    # 6c) 没用的装饰小图，删去：
+    #   - 导航图标：整块只有图，图链到书内目录（「返回目录」箭头、放大镜）；目录页删掉后点不了
+    #   - 分隔小图：同一张图不带链接、单独成段、全书反复出现，前后都是正文（场景之间的小雨伞）
+    gone_roles = ('toc', 'junk')
+    anchor_block = {(b.doc, a): b for b in blocks for a in b.anchors}
+    doc_blocks: dict[str, list] = {}
+    for b in blocks:
+        doc_blocks.setdefault(b.doc, []).append(b)
+
+    def img_srcs(b):
+        return [Book.resolve(b.doc, i.get('src') or '') for i in b.el.iter(X + 'img')]
+
+    def dead_nav(b) -> bool:
+        """块里只有图、每张图都链到已删除的内容（目录条目、整份删掉的目录文件、删掉的图标）。"""
+        imgs = list(b.el.iter(X + 'img'))
+        links = [next((a for a in i.iterancestors() if a.tag == X + 'a'), None) for i in imgs]
+        if not imgs or any(a is None or not a.get('href') or is_external(a.get('href')) for a in links):
+            return False
+        for a in links:
+            href = a.get('href')
+            path, frag = Book.resolve(b.doc, href), href.partition('#')[2]
+            t = anchor_block.get((path, frag)) if frag else None
+            if t is not None and t.role in gone_roles:
+                continue
+            if (not frag or t is None) and path in doc_blocks and \
+                    all(x.role in gone_roles for x in doc_blocks[path]):
+                continue
+            return False
+        return True
+
+    def mark_dead_nav() -> None:
+        changed = True
+        while changed:                     # 删掉一个图标可能让另一份文件整份变空，再看一轮
+            changed = False
+            for b in blocks:
+                if b.role not in gone_roles + ('heading', 'note') and not b.text and dead_nav(b):
+                    b.role, b.reason = 'junk', '链到已删目录的导航图标'
+                    changed = True
+    mark_dead_nav()
+    lone = [b for b in blocks if b.role == 'figure' and not b.text and _local(b.el.tag) != 'figure'
+            and len(img_srcs(b)) == 1 and b.el.find('.//' + X + 'a') is None
+            and not any(x.group == b.idx for x in blocks[b.idx + 1:b.idx + 2])]
+    uses = Counter(img_srcs(b)[0] for b in lone)
+
+    def between_text(b) -> bool:
+        prev = blocks[b.idx - 1] if b.idx else None
+        nxt = blocks[b.idx + 1] if b.idx + 1 < len(blocks) else None
+        return prev is not None and prev.role == 'para' and prev.text != '' and \
+            nxt is not None and nxt.role in ('para', 'center') and nxt.text != ''
+    seps = {src for src, n in uses.items()
+            if n >= 5 and sum(between_text(b) for b in lone if img_srcs(b)[0] == src) >= 0.8 * n}
+    for b in blocks:
+        if b.role == 'figure' and not b.text and _local(b.el.tag) != 'figure' and b.el.find('.//' + X + 'a') is None \
+                and len(img_srcs(b)) == 1 and img_srcs(b)[0] in seps:
+            b.role, b.reason = 'junk', '反复出现的分隔小图'
+            for c in blocks[b.idx + 1:b.idx + 3]:   # 被当成图注的短行（「本集·完」）：图删了，字留下
+                if c.group == b.idx and c.role == 'caption':
+                    c.role, c.group, c.reason = 'center', -1, '分隔小图后的居中短行'
+    mark_dead_nav()                        # 分隔图删掉后，链向它们所在页的图标也失效了
 
     # 7) 广告文件：整份文件多数块是引流内容
     junk_docs = set()

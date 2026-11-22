@@ -8,4 +8,5 @@ section.letter > .letter-title{ margin:1em 0 .8em; font-size:1.15em; text-align:
 .letter p.signature{ margin:.5em 2em .2em 0; text-indent:0; text-align:right; }   /* 署名右齐，右缩 2em */
 .letter p.date{ margin:.2em 0 .5em; text-indent:0; text-align:right; }
 .letter p.postscript, .letter div.postscript{ margin-top:1em; text-align:left; }
+.letter li{ font-family:"Kaiti SC","STKaiti","KaiTi",serif; }                /* 信里的清单与信文同用楷体 */
 .letter + p{ margin-top:.8em; }

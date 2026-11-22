@@ -169,6 +169,9 @@ class _Ctx:
         return self.blocks[j] if 0 <= j < len(self.blocks) and self.blocks[j].doc == b.doc else None
 
 
+_GONE = {'toc', 'note-head', 'junk', 'cover', 'dropped'}   # 重建时删掉的角色（同 rebuild.REMOVED_ROLES）
+
+
 # ---------- 诗歌 ----------
 
 def _poem_lines(b) -> list[tuple[str, float]]:
@@ -330,6 +333,10 @@ def detect_letters(ctx: _Ctx) -> None:
         last_val = None
         while c is not None and steps < 40 and c.role not in ('heading',) and c.unit < 0:
             t = c.text
+            if c.role in _GONE:                        # 要删掉的块（失效导航图标等）不当署名，跳过
+                c = ctx.nxt(c)
+                steps += 1
+                continue
             if len(t) <= 14 and VALEDICTION.match(t):
                 tail[c.idx], last_val = 'valediction', c
             elif last_val is not None and c.idx == last_val.idx + 1 and len(t) <= 8 and \
@@ -370,7 +377,7 @@ def detect_letters(ctx: _Ctx) -> None:
         for idx, part in tail.items():
             blocks[idx].role, blocks[idx].unit, blocks[idx].part = 'letter', u, part
         for x in blocks[b.idx + 1:end.idx]:          # 信尾之间夹的正文（如「此致」与署名之间）
-            if x.unit < 0:
+            if x.unit < 0 and x.role not in _GONE:
                 x.role, x.unit, x.part = 'letter', u, 'body'
         for x in ps:
             x.role, x.unit, x.part = 'letter', u, 'postscript'
@@ -666,12 +673,116 @@ def detect_ad_lines(ctx: _Ctx) -> None:
             break
 
 
+_LIST_NUM = re.compile(r'decimal|alpha|roman|cjk|han|ideographic|latin|greek|armenian|georgian|hiragana|katakana')
+
+
+def detect_source_lists(ctx: _Ctx) -> None:
+    """原书本身用 <ol>/<ul> 写的列表：按它实际显示的样式保留——有编号的成 ol，圆点的成项目列表；
+    list-style 为 none（看不出是列表）的不动。目录、脚注里的 li 已另作处理（角色不是正文）。"""
+    from .semantic import _style_of, class_styles
+    classes = class_styles(ctx.book)
+    blocks = ctx.blocks
+    i = 0
+    while i < len(blocks):
+        b = blocks[i]
+        parent = b.el.getparent()
+        if b.el.tag != X + 'li' or b.role not in PLAIN or b.unit >= 0 or parent is None \
+                or parent.tag not in (X + 'ol', X + 'ul'):
+            i += 1
+            continue
+        run = [b]
+        j = i + 1
+        while j < len(blocks) and blocks[j].el.getparent() is parent and blocks[j].role in PLAIN \
+                and blocks[j].unit < 0:
+            run.append(blocks[j])
+            j += 1
+        st = _style_of(parent, classes)
+        kind = (st.get('list-style-type') or st.get('list-style') or '').strip()
+        if 'none' in kind.split():
+            i = j
+            continue
+        numbered = bool(_LIST_NUM.search(kind)) if kind else parent.tag == X + 'ol'
+        if numbered:
+            start = int(parent.get('start')) if (parent.get('start') or '').isdigit() else 1
+            u = ctx.unit('ol', run[0], level='A', start=start)
+            for c in run:
+                c.role, c.unit, c.part, c.reason = 'ol', u, 'li', '原书的编号列表'
+        else:
+            for c in run:
+                c.role, c.reason = 'bullet', '原书的项目列表'
+        i = j
+
+
+_ICON_MAX = 128          # 图标大小：原图宽高都不超过 128px
+
+
+def _icon_sized(book: Book, b) -> bool:
+    """块里的图都是图标大小（按原图像素，读不出尺寸的不算）。"""
+    imgs = list(b.el.iter(X + 'img'))
+    if not imgs:
+        return False
+    for img in imgs:
+        data = book.files.get(Book.resolve(b.doc, img.get('src') or ''))
+        try:
+            from PIL import Image
+            import io
+            w, h = Image.open(io.BytesIO(data)).size
+        except Exception:
+            return False
+        if w > _ICON_MAX or h > _ICON_MAX:
+            return False
+    return True
+
+
+def detect_letter_boxes(ctx: _Ctx) -> None:
+    """原书标明是信纸的容器（class 含 letter，常画成带框的信纸）：框里的块记同一个 letter_box 编号，
+    重建时整框排成书信（blockquote.letter，楷体），框内的列表、小标题照常各按各的格式。
+    没有称谓的（入学用品清单、魔法部令）也用书信的样式，但不标 z3998:letter（rebuild 判断）。"""
+    box_of: dict[int, int] = {}
+    for b in ctx.blocks:
+        if b.role in _GONE:
+            continue
+        box = next((e for e in [b.el, *b.el.iterancestors()]
+                    if isinstance(e.tag, str) and e.tag != X + 'body'
+                    and 'letter' in re.split(r'[\s_-]+', (e.get('class') or '').lower())), None)
+        if box is None:
+            continue
+        k = box_of.setdefault(id(box), len(box_of))
+        b.attrs['letter_box'] = k
+    # 框里图后的居中短行是框内的小标题（「制服」），不是图注
+    for b in ctx.blocks:
+        if b.role == 'caption' and 'letter_box' in b.attrs and b.el.tag != X + 'figcaption':
+            b.role, b.group, b.reason = 'center', -1, '信纸里的小标题'
+    boxes: dict[int, list] = {}
+    for b in ctx.blocks:
+        if 'letter_box' in b.attrs:
+            boxes.setdefault(b.attrs['letter_box'], []).append(b)
+    # 信头小图标（霍格沃茨来信上的猫头鹰）：框里第一段正文之前（居中的信头、小标题不算正文）、
+    # 只有图标大小的图，删去。信末的签名图在正文之后，不动
+    for group in boxes.values():
+        for b in group:
+            if b.text and b.role not in ('center', 'caption'):
+                break
+            if b.role == 'figure' and _icon_sized(ctx.book, b):
+                b.role, b.reason = 'junk', '信头小图标'
+    # 框里有称谓、但书信识别没成信（没认出信尾）：有称谓就够了（04 4.8.1.4），称谓段记为信的称谓
+    for group in boxes.values():
+        if any(b.role == 'letter' for b in group):
+            continue
+        first = next((b for b in group if b.text), None)
+        if first is not None and _salutation(first):
+            u = ctx.unit('letter', first, level='A')
+            first.role, first.unit, first.part, first.reason = 'letter', u, 'salutation', '信纸里的称谓'
+
+
 def detect(book: Book, an, decisions: dict | None = None) -> None:
     ctx = _Ctx(book, an)
+    detect_source_lists(ctx)
     detect_dl(ctx)
     detect_lists_of(ctx)
     detect_poems(ctx)
     detect_letters(ctx)
+    detect_letter_boxes(ctx)                  # 在书信识别之后：框里没认成信的，才按称谓补
     detect_lists(ctx)
     detect_tables(ctx)
     detect_glossary(ctx)

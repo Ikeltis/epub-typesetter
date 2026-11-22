@@ -1,3 +1,4 @@
+import re
 import shutil
 
 import pytest
@@ -10,7 +11,7 @@ from epub_typesetter.semantic import analyze
 from epub_typesetter.textcheck import compare_blocks
 from epub_typesetter.xhtml import X
 
-from conftest import JPEG, make_epub
+from conftest import JPEG, OPF2, XHTML11, make_epub
 
 EPUB_T = '{%s}type' % NS['epub']
 
@@ -221,3 +222,231 @@ def test_ordinal_and_title_headings_merged_and_toc_headings_dropped():
     assert h.get('id') == 'a1'                                       # 原锚点保留
     assert sum(1 for r, _ in rep.rebuild.removed if r == 'toc') == 3  # 目录页标题 + 两个链接型标题
     assert compare_blocks(rep.analysis.blocks, REMOVED_ROLES, out).ok
+
+
+OMNIBUS_T1 = XHTML11.format(title='1', body='<h1 title="Ⅰ 甲书"><img alt="t1" src="../Images/cover.jpg"/></h1>'
+                            '<h2><span>第1章</span><br/>开端</h2>'
+                            '<p><span style="float: left; font-size: 2em; font-weight: bold; color: #694776">甲</span>'
+                            '书开头。</p><h2>第2章 远行</h2><p>乙。</p>')
+OMNIBUS_T2 = ('<?xml version="1.0" encoding="utf-8"?>\n<html xmlns="http://www.w3.org/1999/xhtml"><head><title>2</title>'
+              '</head><body style="background: url(../Images/bg.jpg) no-repeat center">'
+              '<div class="img0"><h1 title="Ⅱ 乙书"><br/></h1></div></body></html>')
+OMNIBUS_T3 = XHTML11.format(title='3', body='<h2>第1章<br/> <span class="img0"> <img alt="alt" src="../Images/bg.jpg"'
+                            ' height="100"/> </span><br/>归来</h2><p>丙。</p><h2>第2章 再会</h2><p>丁。</p>'
+                            '<h2>尾声</h2><p>戊。</p><h2>阿不思·邓布利多<br/>的序言</h2><p>己。</p>')
+OMNIBUS_T4 = XHTML11.format(title='4', body='<h1>Ⅲ 丙书</h1><h2>第1章 启程</h2><p>庚。</p><h2>第2章 终点</h2><p>辛。</p>'
+                            '<h1>附录</h1><h2>前传</h2><p>癸。</p><h2>小书</h2><h3>版权信息</h3><p>子。</p>'
+                            '<h1>制作手记</h1><p>壬。</p>')
+
+
+def _omnibus() -> bytes:
+    opf = OPF2.replace('<item id="cover-img"', '<item id="c3" href="Text/c3.xhtml" media-type="application/xhtml+xml"/>'
+                       '<item id="c4" href="Text/c4.xhtml" media-type="application/xhtml+xml"/>'
+                       '<item id="bg" href="Images/bg.jpg" media-type="image/jpeg"/><item id="cover-img"')
+    opf = opf.replace('<itemref idref="c2"/>', '<itemref idref="c2"/><itemref idref="c3"/><itemref idref="c4"/>')
+    return make_epub({'OEBPS/content.opf': opf, 'OEBPS/Images/bg.jpg': JPEG,
+                      'OEBPS/Text/c1.xhtml': OMNIBUS_T1, 'OEBPS/Text/c2.xhtml': OMNIBUS_T2,
+                      'OEBPS/Text/c3.xhtml': OMNIBUS_T3, 'OEBPS/Text/c4.xhtml': OMNIBUS_T4})
+
+
+def _nav_top(out: Book) -> list:
+    nav = next(i for i in out.manifest() if 'nav' in i.properties)
+    toc = out.tree(nav.path).getroot().find(f".//{X}nav[@{EPUB_T}='toc']")
+    return toc.find(f'{X}ol').findall(f'{X}li')
+
+
+def test_omnibus_titles_in_title_attr_become_parts():
+    """合集：各册标题字只在 title 属性里（图片标题 / 背景图上的空标题），不叫「第X部」也要认作部；
+    背景整页图转成插图；目录文字里 <br/> 的处理。"""
+    b = Book.load(_omnibus())
+    rep = optimize(b)
+    out = Book.load(b.to_bytes())
+    assert compare_blocks(rep.analysis.blocks, REMOVED_ROLES, out).ok
+    top = _nav_top(out)
+    assert [li.find(f'{X}a').text for li in top] == ['Ⅰ 甲书', 'Ⅱ 乙书', 'Ⅲ 丙书', '附录', '制作手记']
+    assert [a.text for a in top[0].iter(X + 'a')][1:] == ['第1章　开端', '第2章　远行']
+    assert [a.text for a in top[1].iter(X + 'a')][1:] == ['第1章　归来', '第2章　再会', '尾声',
+                                                          '阿不思·邓布利多的序言']   # 尾声留在本册里
+    # 附录下面不是「第X章」：附录不算部，作章，子项作节嵌在下面
+    assert [a.text for a in top[3].iter(X + 'a')][1:] == ['前传', '小书']
+    xs = {p: out.files[p].decode() for p in out.files if p.endswith('.xhtml')}
+    assert sum(s.count('class="part-title"') for s in xs.values()) == 3
+    assert any('<h2 class="chapter-title"' in s and '>附录</h2>' in s for s in xs.values())
+    # 首字下沉：放大、浮动去掉后，颜色、加粗也不留
+    assert any('<p>甲书开头。</p>' in s for s in xs.values())
+    assert any('alt="Ⅰ 甲书"' in s for s in xs.values())                    # 图片标题：文字进 alt，图照常显示
+    assert any('>Ⅱ 乙书</h2>' in s for s in xs.values())                     # 空标题：直接输出文字
+    assert any('bg.jpg' in s for s in xs.values()) and 'OEBPS/Images/bg.jpg' in out.files   # 背景整页图没丢
+    # 「第1章<br/>题图<br/>归来」→ 标题只留「第1章<br/>归来」，题图移到标题下方，单独成居中的 figure
+    assert any(re.search(r'<h3 class="chapter-title" id="[^"]+">第1章<br/>归来</h3>'
+                         r'<figure><img alt="" src="\.\./Images/bg\.jpg"/></figure>', s) for s in xs.values())
+
+
+def test_omnibus_volume_forced_to_chapter_and_image_title_renamed():
+    """确认板：把一册（与部同级）指定为章 → 并进前一部，原来的各章随它降为节；
+    改写图片标题的文字 → 图片保留，新文字进 alt 和目录。"""
+    from epub_typesetter import board
+    from epub_typesetter.semantic import block_keys
+    an = analyze(Book.load(_omnibus()))
+    keys = block_keys(an.blocks)
+    key = {b.text: keys[b.idx] for b in an.blocks if b.role == 'heading'}
+    d = board.empty()
+    d['heads'][key['Ⅱ 乙书']] = 'chapter'
+    d['titles'][key['Ⅰ 甲书']] = '甲书'
+    b = Book.load(_omnibus())
+    rep = optimize(b, decisions=d)
+    out = Book.load(b.to_bytes())
+    assert compare_blocks(rep.analysis.blocks, REMOVED_ROLES, out).ok
+    top = _nav_top(out)
+    assert [li.find(f'{X}a').text for li in top] == ['甲书', 'Ⅲ 丙书', '附录', '制作手记']
+    first = [li.find(f'{X}a').text for li in top[0].find(f'{X}ol').findall(f'{X}li')]
+    assert first == ['第1章　开端', '第2章　远行', 'Ⅱ 乙书']           # 乙书在甲书这一部里
+    vol2 = top[0].find(f'{X}ol').findall(f'{X}li')[2]
+    assert [li.find(f'{X}a').text for li in vol2.find(f'{X}ol').findall(f'{X}li')][:3] == \
+        ['第1章　归来', '第2章　再会', '尾声']                            # 原来的章降为节，嵌在乙书下
+    xs = ''.join(out.files[p].decode() for p in out.files if p.endswith('.xhtml'))
+    assert 'alt="甲书"' in xs and 'Ⅰ' not in xs.replace('alt="Ⅰ', '')    # 图片还在，文字改了
+    assert '<h3 class="chapter-title"' in xs and '>Ⅱ 乙书</h3>' in xs
+
+
+def test_visible_toc_with_group_rows_removed():
+    """书内目录页里夹着「第一部」+ 装饰图这样的分组行：整页都要删掉，成品里不留看得见的目录。"""
+    toc_page = XHTML11.format(title='目录', body=(
+        '<h1>目录</h1><p class="c">第一部<br/><img src="../Images/cover.jpg" alt=""/><br/>'
+        '<a href="c2.xhtml">甲书</a></p><p><a href="c2.xhtml#a1">第1章 开端</a></p>'
+        '<p><a href="c2.xhtml#a2">第2章 远行</a></p><div><img src="../Images/cover.jpg" alt=""/></div>'
+        '<p class="c">第二部</p><p><a href="c2.xhtml#a3">第3章 归来</a></p>'))
+    body = XHTML11.format(title='正文', body='<h1 id="a1">第1章 开端</h1><p>甲。</p><h1 id="a2">第2章 远行</h1>'
+                                             '<p>乙。</p><h1 id="a3">第3章 归来</h1><p>丙。</p>')
+    b = Book.load(make_epub({'OEBPS/Text/c1.xhtml': toc_page, 'OEBPS/Text/c2.xhtml': body}))
+    rep = optimize(b)
+    out = Book.load(b.to_bytes())
+    assert compare_blocks(rep.analysis.blocks, REMOVED_ROLES, out).ok
+    text = ''.join(out.files[p].decode() for p in out.files if p.endswith('.xhtml') and 'nav' not in p)
+    assert '第一部' not in text and '第二部' not in text and '>目录<' not in text
+    bodies = ''.join(re.findall(r'<body.*?</body>', text, re.S))
+    assert bodies.count('第1章') == 1                  # 只剩正文里的章标题（<title> 里的不算）
+
+
+def test_image_noteref_with_linked_note_body():
+    """注号是一张小图、注文整段包在指回注号的链接里（哈利波特全集的写法）：照样认作注释，
+    改成书末尾注；注文里旧的回链拆掉只留文字；注号图换成编号不算丢图。"""
+    body = XHTML11.format(title='正文', body=(
+        '<h1>第1章 开端<sup><a href="#footnote2" id="note2" epub:type="noteref" '
+        'xmlns:epub="http://www.idpf.org/2007/ops"><img alt="注" src="../Images/cover.jpg"/></a></sup></h1>'
+        '<p>上马约卡岛<sup><a href="#footnote1" id="note1"><img alt="note1" '
+        'src="../Images/cover.jpg" height="12"/></a></sup>度假去了。</p>'
+        '<p>又一段<sup><a href="#footnote3" id="note3"><img alt="注" src="../Images/cover.jpg"/></a></sup>。</p>'
+        '<p id="footnote1"><a href="#note1">马约卡岛，在西地中海，属西班牙。</a></p>'
+        '<p id="footnote2"><a href="#note2">标题上的注。</a></p>'
+        '<p id="footnote3"><a href="#note3"><img alt="alt" src="../Images/cover.jpg" style="height: 1em"/></a></p>'))
+    b = Book.load(make_epub({'OEBPS/Text/c1.xhtml': body, 'OEBPS/Text/c2.xhtml': None}))
+    rep = optimize(b)
+    out = Book.load(b.to_bytes())
+    bc = compare_blocks(rep.analysis.blocks, REMOVED_ROLES, out)
+    assert bc.ok, bc.summary()
+    ch = next(out.files[p].decode() for p in out.files if p.endswith('chapter01.xhtml'))
+    assert 'class="noteref"' in ch and 'href="endnotes.xhtml#note-1"' in ch
+    assert '马约卡岛，在西地中海' not in ch                          # 注文不再留在章末
+    notes = out.files['OEBPS/Text/endnotes.xhtml'].decode()
+    assert notes.count('<li id="note-') == 3
+    li = re.search(r'<li id="note-2">.*?</li>', notes, re.S).group(0)
+    assert '<p>马约卡岛，在西地中海，属西班牙。' in li                   # 旧回链拆掉，只留文字
+    assert 'backlink' in li
+    # 标题里的注号也配上；目录文字不带注号编号
+    assert '标题上的注。' in re.search(r'<li id="note-1">.*?</li>', notes, re.S).group(0)
+    nav = next(i for i in out.manifest() if 'nav' in i.properties)
+    assert '>第1章　开端</a>' in out.files[nav.path].decode()
+    # 整条注文只有一张图：按原样显示，不当成行内图片字压成一个字高
+    li3 = re.search(r'<li id="note-3">.*?</li>', notes, re.S).group(0)
+    assert '<img' in li3 and 'glyph' not in li3
+
+
+def test_separator_images_and_dead_nav_icons_removed():
+    """场景之间反复出现的分隔小图（小雨伞）、链到书内目录的导航图标（目录页删掉后点不了）：都删去；
+    分隔图后被当成图注的「本集·完」留作居中文字；只出现一次的正文插图保留。"""
+    opf = OPF2.replace('<item id="cover-img"', ''.join(
+        f'<item id="{n}" href="Images/{n}.jpg" media-type="image/jpeg"/>' for n in ('sep', 'arrow', 'ill'))
+        + '<item id="cover-img"')
+    toc_page = XHTML11.format(title='目录', body='<h1>目录</h1><p><a href="c2.xhtml#a1">第1章 开端</a></p>'
+                                                  '<p><a href="c2.xhtml#a2">第2章 远行</a></p>')
+    sep = '<div class="img0"><img alt="alt" src="../Images/sep.jpg" width="40px"/></div>'
+    paras = sep.join(f'<p>第{k}段正文，写得长一些。</p>' for k in range(6))
+    body = XHTML11.format(title='正文', body=(
+        f'<h1 id="a1">第1章 开端</h1><div class="r"><a href="c1.xhtml"><img alt="alt" src="../Images/arrow.jpg"'
+        f' width="24"/></a></div>{paras}<div><img alt="alt" src="../Images/ill.jpg"/></div><p>又一段。</p>'
+        f'<h1 id="a2">第2章 远行</h1><p>他拆开了信。</p>{sep}<p>波特先生：</p><p>来信正文。</p><p>乙。</p>'
+        f'<div class="img0"><img alt="alt" src="../Images/sep.jpg" width="80px"/></div><p class="c">本集·完</p>'))
+    files = {'OEBPS/content.opf': opf, 'OEBPS/Text/c1.xhtml': toc_page, 'OEBPS/Text/c2.xhtml': body}
+    files.update({f'OEBPS/Images/{n}.jpg': JPEG for n in ('sep', 'arrow', 'ill')})
+    b = Book.load(make_epub(files))
+    rep = optimize(b)
+    out = Book.load(b.to_bytes())
+    bc = compare_blocks(rep.analysis.blocks, REMOVED_ROLES, out)
+    assert bc.ok, bc.summary()
+    xs = ''.join(out.files[p].decode() for p in out.files if p.endswith('.xhtml'))
+    assert 'arrow.jpg' not in xs and '<hr' not in xs                           # 直接删，不换成分隔线
+    # 放在信的称呼前面的也删（信头小图标不要）；段落之间、「本集·完」前的都删
+    assert 'sep.jpg' not in xs and '波特先生：' in xs
+    assert xs.count('ill.jpg') == 1                                           # 正文插图保留
+    assert '本集·完' in xs and '<figcaption>本集·完' not in xs
+    assert all(f'第{k}段正文' in xs for k in range(6))
+
+
+def test_letter_paper_boxes_and_source_lists():
+    """原书的信纸框（div.letter）：整框排成 blockquote.letter（书信样式和楷体），框里的清单、小标题照常；
+    有称谓才标 z3998:letter；框里的 blockquote 不再嵌套。原书 ol/ul 按实际显示样式保留成列表。"""
+    body = XHTML11.format(title='正文', body=(
+        '<h1>第1章 开端</h1><p>他读道：</p>'
+        '<div class="letter"><div class="img0"><img alt="alt" src="../Images/owl.jpg" width="40px"/></div>'
+        '<p class="letint">霍格沃茨魔法学校</p><p class="sc">制服</p><p>一年级新生需要：</p>'
+        '<ol class="list" style="list-style:circle outside"><li>三套工作袍</li><li>一顶尖顶帽</li></ol>'
+        '<blockquote><p>不准自带飞天扫帚。</p></blockquote></div>'
+        '<p>他又读第二封：</p>'
+        '<div class="letter"><p>亲爱的波特先生：</p><p>我们接到报告。</p>'
+        '<div class="img0"><img alt="alt" src="../Images/sign.png"/></div></div>'
+        '<p>后来：</p><ol style="list-style-type: decimal;" start="54"><li>第五十四条</li><li>第五十五条</li></ol>'))
+    import io
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new('RGB', (300, 60), (255, 255, 255)).save(buf, 'PNG')              # 签名图：宽，不是图标
+    opf = OPF2.replace('<item id="cover-img"', '<item id="owl" href="Images/owl.jpg" media-type="image/jpeg"/>'
+                       '<item id="sign" href="Images/sign.png" media-type="image/png"/><item id="cover-img"')
+    b = Book.load(make_epub({'OEBPS/content.opf': opf, 'OEBPS/Text/c1.xhtml': body, 'OEBPS/Text/c2.xhtml': None,
+                             'OEBPS/Images/owl.jpg': JPEG, 'OEBPS/Images/sign.png': buf.getvalue()}))
+    rep = optimize(b)
+    out = Book.load(b.to_bytes())
+    bc = compare_blocks(rep.analysis.blocks, REMOVED_ROLES, out)
+    assert bc.ok, bc.summary()
+    xs = ''.join(out.files[p].decode() for p in out.files if p.endswith('chapter01.xhtml'))
+    boxes = re.findall(r'<blockquote class="letter"[^>]*>.*?</blockquote>', xs, re.S)
+    assert len(boxes) == 2
+    assert 'z3998:letter' not in boxes[0] and 'z3998:letter' in boxes[1]       # 清单不是信，第二封是
+    assert 'owl.jpg' not in xs and 'sign.png' in boxes[1]                     # 信头小图标删，信末签名图留
+    assert '<ul class="bullets"><li>三套工作袍</li><li>一顶尖顶帽</li></ul>' in boxes[0]
+    assert '<blockquote' not in boxes[0][1:] and '不准自带飞天扫帚。' in boxes[0]
+    assert 'z3998:salutation' in boxes[1]
+    assert '<ol start="54"><li>第五十四条</li>' in xs
+    css = out.files['OEBPS/styles/typesetter.css'].decode()
+    assert '.letter li{' in css                                               # 信里的清单也用楷体
+
+
+def test_reader_specific_stuff_removed():
+    """多看等阅读器专用的东西不进成品：OPF 私有 meta、只给它们用的字体、指向已删文件的 encryption.xml、
+    带厂商名的唯一标识 id。"""
+    opf = OPF2.replace('unique-identifier="bookid"', 'unique-identifier="duokan-book-id"') \
+        .replace('id="bookid"', 'id="duokan-book-id"') \
+        .replace('<meta name="cover" content="cover-img"/>',
+                 '<meta name="cover" content="cover-img"/><meta name="duokan-body-font" content="DK-SONGTI"/>') \
+        .replace('<item id="cover-img"', '<item id="f1" href="Fonts/dk.ttf" media-type="font/ttf"/><item id="cover-img"')
+    enc = ('<?xml version="1.0" encoding="UTF-8"?><encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container"'
+           ' xmlns:enc="http://www.w3.org/2001/04/xmlenc#"><enc:EncryptedData><enc:CipherData>'
+           '<enc:CipherReference URI="OEBPS/Styles/dkagent.css"/></enc:CipherData></enc:EncryptedData></encryption>')
+    b = Book.load(make_epub({'OEBPS/content.opf': opf, 'OEBPS/Fonts/dk.ttf': b'\x00\x01\x00\x00' + b'\x00' * 60,
+                             'META-INF/encryption.xml': enc}))
+    optimize(b)
+    out = Book.load(b.to_bytes())
+    opf_out = out.files[out.opf_path].decode()
+    assert 'duokan' not in opf_out and 'dk.ttf' not in opf_out
+    assert 'unique-identifier="pub-id"' in opf_out and 'id="pub-id"' in opf_out
+    assert 'META-INF/encryption.xml' not in out.files and 'OEBPS/Fonts/dk.ttf' not in out.files

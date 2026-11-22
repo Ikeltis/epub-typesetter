@@ -713,6 +713,27 @@ def detect_source_lists(ctx: _Ctx) -> None:
         i = j
 
 
+_ICON_MAX = 128          # 图标大小：原图宽高都不超过 128px
+
+
+def _icon_sized(book: Book, b) -> bool:
+    """块里的图都是图标大小（按原图像素，读不出尺寸的不算）。"""
+    imgs = list(b.el.iter(X + 'img'))
+    if not imgs:
+        return False
+    for img in imgs:
+        data = book.files.get(Book.resolve(b.doc, img.get('src') or ''))
+        try:
+            from PIL import Image
+            import io
+            w, h = Image.open(io.BytesIO(data)).size
+        except Exception:
+            return False
+        if w > _ICON_MAX or h > _ICON_MAX:
+            return False
+    return True
+
+
 def detect_letter_boxes(ctx: _Ctx) -> None:
     """原书标明是信纸的容器（class 含 letter，常画成带框的信纸）：框里的块记同一个 letter_box 编号，
     重建时整框排成书信（blockquote.letter，楷体），框内的列表、小标题照常各按各的格式。
@@ -732,11 +753,19 @@ def detect_letter_boxes(ctx: _Ctx) -> None:
     for b in ctx.blocks:
         if b.role == 'caption' and 'letter_box' in b.attrs and b.el.tag != X + 'figcaption':
             b.role, b.group, b.reason = 'center', -1, '信纸里的小标题'
-    # 框里有称谓、但书信识别没成信（没认出信尾）：有称谓就够了（04 4.8.1.4），称谓段记为信的称谓
     boxes: dict[int, list] = {}
     for b in ctx.blocks:
         if 'letter_box' in b.attrs:
             boxes.setdefault(b.attrs['letter_box'], []).append(b)
+    # 信头小图标（霍格沃茨来信上的猫头鹰）：框里第一段正文之前（居中的信头、小标题不算正文）、
+    # 只有图标大小的图，删去。信末的签名图在正文之后，不动
+    for group in boxes.values():
+        for b in group:
+            if b.text and b.role not in ('center', 'caption'):
+                break
+            if b.role == 'figure' and _icon_sized(ctx.book, b):
+                b.role, b.reason = 'junk', '信头小图标'
+    # 框里有称谓、但书信识别没成信（没认出信尾）：有称谓就够了（04 4.8.1.4），称谓段记为信的称谓
     for group in boxes.values():
         if any(b.role == 'letter' for b in group):
             continue

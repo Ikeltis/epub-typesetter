@@ -386,8 +386,8 @@ def test_separator_images_and_dead_nav_icons_removed():
     assert bc.ok, bc.summary()
     xs = ''.join(out.files[p].decode() for p in out.files if p.endswith('.xhtml'))
     assert 'arrow.jpg' not in xs and '<hr' not in xs                           # 直接删，不换成分隔线
-    # 同一张图放在信的称呼前面是信头徽记，留下；其余几处（段落之间、「本集·完」前）都删
-    assert xs.count('sep.jpg') == 1 and re.search(r'sep\.jpg"[^>]*/></figure><p[^>]*>波特先生：', xs)
+    # 放在信的称呼前面的也删（信头小图标不要）；段落之间、「本集·完」前的都删
+    assert 'sep.jpg' not in xs and '波特先生：' in xs
     assert xs.count('ill.jpg') == 1                                           # 正文插图保留
     assert '本集·完' in xs and '<figcaption>本集·完' not in xs
     assert all(f'第{k}段正文' in xs for k in range(6))
@@ -398,13 +398,22 @@ def test_letter_paper_boxes_and_source_lists():
     有称谓才标 z3998:letter；框里的 blockquote 不再嵌套。原书 ol/ul 按实际显示样式保留成列表。"""
     body = XHTML11.format(title='正文', body=(
         '<h1>第1章 开端</h1><p>他读道：</p>'
-        '<div class="letter"><p class="letint">霍格沃茨魔法学校</p><p class="sc">制服</p><p>一年级新生需要：</p>'
+        '<div class="letter"><div class="img0"><img alt="alt" src="../Images/owl.jpg" width="40px"/></div>'
+        '<p class="letint">霍格沃茨魔法学校</p><p class="sc">制服</p><p>一年级新生需要：</p>'
         '<ol class="list" style="list-style:circle outside"><li>三套工作袍</li><li>一顶尖顶帽</li></ol>'
         '<blockquote><p>不准自带飞天扫帚。</p></blockquote></div>'
         '<p>他又读第二封：</p>'
-        '<div class="letter"><p>亲爱的波特先生：</p><p>我们接到报告。</p><p>马法尔达·霍普柯克</p></div>'
+        '<div class="letter"><p>亲爱的波特先生：</p><p>我们接到报告。</p>'
+        '<div class="img0"><img alt="alt" src="../Images/sign.png"/></div></div>'
         '<p>后来：</p><ol style="list-style-type: decimal;" start="54"><li>第五十四条</li><li>第五十五条</li></ol>'))
-    b = Book.load(make_epub({'OEBPS/Text/c1.xhtml': body, 'OEBPS/Text/c2.xhtml': None}))
+    import io
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new('RGB', (300, 60), (255, 255, 255)).save(buf, 'PNG')              # 签名图：宽，不是图标
+    opf = OPF2.replace('<item id="cover-img"', '<item id="owl" href="Images/owl.jpg" media-type="image/jpeg"/>'
+                       '<item id="sign" href="Images/sign.png" media-type="image/png"/><item id="cover-img"')
+    b = Book.load(make_epub({'OEBPS/content.opf': opf, 'OEBPS/Text/c1.xhtml': body, 'OEBPS/Text/c2.xhtml': None,
+                             'OEBPS/Images/owl.jpg': JPEG, 'OEBPS/Images/sign.png': buf.getvalue()}))
     rep = optimize(b)
     out = Book.load(b.to_bytes())
     bc = compare_blocks(rep.analysis.blocks, REMOVED_ROLES, out)
@@ -413,6 +422,7 @@ def test_letter_paper_boxes_and_source_lists():
     boxes = re.findall(r'<blockquote class="letter"[^>]*>.*?</blockquote>', xs, re.S)
     assert len(boxes) == 2
     assert 'z3998:letter' not in boxes[0] and 'z3998:letter' in boxes[1]       # 清单不是信，第二封是
+    assert 'owl.jpg' not in xs and 'sign.png' in boxes[1]                     # 信头小图标删，信末签名图留
     assert '<ul class="bullets"><li>三套工作袍</li><li>一顶尖顶帽</li></ul>' in boxes[0]
     assert '<blockquote' not in boxes[0][1:] and '不准自带飞天扫帚。' in boxes[0]
     assert 'z3998:salutation' in boxes[1]

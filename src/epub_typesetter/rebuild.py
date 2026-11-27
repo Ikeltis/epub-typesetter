@@ -303,8 +303,11 @@ def _resolve_soft(dst: etree._Element) -> None:
 
 
 class Rebuilder:
-    def __init__(self, book: Book, an: Analysis, theme: str = 'default', extra_css: str = ''):
+    def __init__(self, book: Book, an: Analysis, theme: str = 'default', extra_css: str = '',
+                 style: dict | None = None):
         self.book, self.an, self.theme = book, an, theme
+        self.style = style or {}                      # 按书选项的外观（options.STYLE），插图大小、位置在这里用
+        self.img_classes: set[str] = set()            # 用到的插图宽度、位置类，样式表里按需生成
         self.extra_css = extra_css                    # 按书选项的外观覆盖（options.style_css），追加在样式表最后
         self.rep = RebuildReport()
         self.out_dir = posixpath.dirname(an.blocks[0].doc) if an.blocks else book.opf_dir
@@ -874,6 +877,83 @@ class Rebuilder:
             _tidy_breaks(e)
         return out
 
+    REF_PAGE_PX = 600        # 原书用像素写插图宽度时，按这个参考页宽折算成百分比（常见电子书版面宽度，估算）
+
+    def _orig_width(self, img, block) -> tuple[str, float] | None:
+        """原书给这张图定的显示宽度：先看 img 自己（width 属性、内联或类样式），再看到所在块为止的外层容器。
+        返回 ('pct', 0–100) 或 ('em', n)；没写就是 None。"""
+        cur = img
+        while cur is not None and isinstance(cur.tag, str):
+            st = _style_of(cur, self.classes)
+            for v in ((cur.get('width') or '').strip() if cur is img else '', st.get('width', '')):
+                m = re.fullmatch(r'([\d.]+)\s*(%|px|em|rem)?', v or '')
+                if m and float(m.group(1)) > 0:
+                    n, unit = float(m.group(1)), m.group(2) or 'px'
+                    if unit == '%':
+                        return 'pct', min(100.0, n)
+                    if unit in ('em', 'rem'):
+                        return 'em', n
+                    return 'pct', min(100.0, n / self.REF_PAGE_PX * 100)
+            if cur is block:
+                return None
+            cur = cur.getparent()
+        return None
+
+    def _orig_place(self, img, block) -> str:
+        """原书的位置：'float-left' / 'float-right'（文字绕排）、'left' / 'right'（靠边、不绕排）、''（居中或没写）。"""
+        cur = img
+        while cur is not None and isinstance(cur.tag, str):
+            st = _style_of(cur, self.classes)
+            fl = st.get('float', '')
+            if cur is img and not fl:
+                fl = (cur.get('align') or '').lower()
+            if fl in ('left', 'right'):
+                return 'float-' + fl
+            if cur is not img and st.get('text-align') in ('left', 'right'):
+                return st['text-align']
+            if cur is block:
+                return ''
+            cur = cur.getparent()
+        return ''
+
+    def _size_figure(self, src_img, block, img, fig) -> None:
+        """插图大小与位置（按书选项 image_width / image_align；默认按原书）。"""
+        mode = self.style.get('image_width', 'original')
+        place = self._orig_place(src_img, block) if self.style.get('image_align', 'original') == 'original' else ''
+        if place.startswith('float-'):
+            # 文字绕排：figure 占 45%（04 4.11.1.9，窄屏自动取消），图在 figure 里撑满
+            fig.set('class', ' '.join(filter(None, [fig.get('class'), place])))
+            self.tpl_used.add('figure')
+            return
+        if place:
+            fig.set('class', ' '.join(filter(None, [fig.get('class'), 'fig-' + place])))
+            self.img_classes.add('fig-' + place)
+        if mode != 'original':
+            return
+        w = self._orig_width(src_img, block)
+        if w is None:
+            return
+        kind, n = w
+        cls = f'w-{max(5, min(100, int(round(n / 5) * 5)))}' if kind == 'pct' else f'w-{int(round(n))}em'
+        img.set('class', ' '.join(filter(None, [img.get('class'), cls])))
+        self.img_classes.add(cls)
+
+    def _img_css(self) -> str:
+        """用到的插图宽度、位置类（w-35、w-6em、fig-left…）。"""
+        out = []
+        for c in sorted(self.img_classes):
+            if m := re.fullmatch(r'w-(\d+)', c):
+                out.append(f'figure img.{c}{{ width:{m.group(1)}%; }}')
+            elif m := re.fullmatch(r'w-(\d+)em', c):
+                out.append(f'figure img.{c}{{ width:{m.group(1)}em; max-width:100%; }}')
+            elif c == 'fig-left':
+                out.append('figure.fig-left img{ margin-left:0; margin-right:auto; }\n'
+                           'figure.fig-left figcaption{ text-align:left; }')
+            elif c == 'fig-right':
+                out.append('figure.fig-right img{ margin-left:auto; margin-right:0; }\n'
+                           'figure.fig-right figcaption{ text-align:right; }')
+        return '\n/* ===== 插图大小与位置（按原书）===== */\n' + '\n'.join(out) + '\n' if out else ''
+
     def _only_noteref(self, el) -> bool:
         """el 不是注号本身，但里面有注号，且除注号文字外没有别的文字。"""
         if id(el) in self.noteref_els:
@@ -978,6 +1058,7 @@ class Rebuilder:
                         if id(img) in self.alt_for:
                             e.set('alt', self.alt_for[id(img)])
                         if _local(img.tag) == 'img':
+                            self._size_figure(img, b.el, e, fig)
                             e.attrib.pop('width', None)
                             e.attrib.pop('height', None)
                         if e.get('src'):
@@ -1502,6 +1583,7 @@ class Rebuilder:
                 css += b'\n' + template_css(name, n).encode('utf-8') + b'\n'
         if self.tpl_used:
             self.rep.log.append('追加模板样式：' + '、'.join(n for n in TEMPLATE_ORDER if n in self.tpl_used))
+        css += self._img_css().encode('utf-8')
         if self.extra_css:
             css += self.extra_css.encode('utf-8')
             self.rep.log.append('追加按书选项的外观样式')
@@ -1653,6 +1735,7 @@ class Rebuilder:
         return '\n'.join(x for x in out if x).encode('utf-8')
 
 
-def rebuild(book: Book, analysis: Analysis, theme: str = 'default', extra_css: str = '') -> RebuildReport:
-    return Rebuilder(book, analysis, theme, extra_css).run()
+def rebuild(book: Book, analysis: Analysis, theme: str = 'default', extra_css: str = '',
+            style: dict | None = None) -> RebuildReport:
+    return Rebuilder(book, analysis, theme, extra_css, style).run()
 

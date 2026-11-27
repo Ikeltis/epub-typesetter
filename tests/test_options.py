@@ -61,3 +61,48 @@ def test_style_overrides_appended():
     assert 'text-align:center' in tail and 'text-indent:0; margin:.6em 0' in tail and 'line-height:1.8' in tail
     assert 'Noto Serif CJK SC' in tail
     assert options.changed(o) == ['标题字体宋体', '标题对齐居中', '段落不缩进，段间空开', '行高1.8']
+
+
+def build_img(body, opts=None):
+    src = make_epub({'OEBPS/Text/c1.xhtml': XHTML11.format(title='一', body=body),
+                     'OEBPS/Images/big.png': _png(1200, 800)})
+    b = Book.load(src)
+    rep = optimize(b, options=opts)
+    out = Book.load(b.to_bytes())
+    assert compare_blocks(rep.analysis.blocks, REMOVED_ROLES, out).ok
+    return out
+
+
+def _png(w, h):
+    import io
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new('RGB', (w, h), (200, 100, 50)).save(buf, 'PNG')
+    return buf.getvalue()
+
+
+def figures(book):
+    return [(f.get('class'), [i.get('class') for i in f.iter(X + 'img')])
+            for p in book.content_docs() for f in book.tree(p).getroot().iter(X + 'figure')]
+
+
+IMG_BODY = ('<h1>第一章</h1>' + P +
+            '<div style="text-align:left"><img src="../Images/big.png" style="width:20%"/></div>' + P +
+            '<p><img src="../Images/big.png" width="420"/></p>' + P +
+            '<div style="float:right"><img src="../Images/big.png"/></div>' + P)
+
+
+def test_image_size_and_place_follow_original_by_default():
+    out = build_img(IMG_BODY)
+    assert figures(out) == [('fig-left', ['w-20']), (None, ['w-70']), ('float-right', [None])]   # 420/600 = 70%
+    c = css(out)
+    assert 'figure img.w-20{ width:20%; }' in c and 'figure.fig-left img{ margin-left:0' in c
+    assert 'figure.float-right' in c                                                          # 绕排模板
+
+
+def test_image_size_options():
+    out = build_img(IMG_BODY, {'style': {'image_width': '60', 'image_align': 'center'}})
+    assert figures(out) == [(None, [None])] * 3
+    assert 'figure img{ width:60%; }' in css(out)
+    out = build_img(IMG_BODY, {'style': {'image_width': 'natural'}})
+    assert [f[1] for f in figures(out)] == [[None], [None], [None]] and figures(out)[0][0] == 'fig-left'

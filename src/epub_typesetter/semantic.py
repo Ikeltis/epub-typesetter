@@ -596,6 +596,10 @@ def analyze(book: Book, decisions: dict | None = None) -> Analysis:
             if not (labelled or mutual):
                 continue
             target.role, target.reason = 'note', f'被正文注号 {label or "（图片）"} 指向'
+            # 注文开头的原编号（[1]、(1)、①…）重建时换成列表编号：文字校验按去掉编号后的文字核对
+            m = NOTE_LABEL_RE.match(target.text)
+            if m and target.verify is None:
+                target.verify = target.text[m.end():].lstrip(' \u3000')
             noterefs.setdefault(target.idx, []).append(a)
             if img_ref:            # 重建时注号图换成编号：图片计数不算它（textcheck）
                 b.attrs['noteref_imgs'] = b.attrs.get('noteref_imgs', 0) + sum(1 for _ in a.iter(X + 'img'))

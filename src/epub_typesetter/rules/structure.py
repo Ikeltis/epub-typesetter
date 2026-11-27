@@ -147,6 +147,9 @@ class PackageMetadata(Rule):
         mods = md.findall("opf:meta[@property='dcterms:modified']", NS)
         if len(mods) != 1 or not MODIFIED_RE.match((mods[0].text or '').strip()):
             out.append(self.issue(ERROR, 'dcterms:modified 缺失、重复或格式错误', book.opf_path, AUTO, kind='modified'))
+        if opf.find('opf:tours', NS) is not None:
+            # OPF 2 的 <tours> 早已废弃，EPUB 3 不允许（epubcheck RSC-005）；里面通常是空的
+            out.append(self.issue(ERROR, 'OPF 里有已废弃的 <tours> 元素', book.opf_path, AUTO, kind='tours'))
         return out
 
     def fix(self, book, issues):
@@ -169,6 +172,10 @@ class PackageMetadata(Rule):
                 first.set('id', 'bookid')
             book.opf.set('unique-identifier', first.get('id'))
             log.append(f'unique-identifier 指向 {first.get("id")}')
+        if 'tours' in kinds:
+            for t in book.opf.findall('opf:tours', NS):
+                book.opf.remove(t)
+            log.append('删除已废弃的 <tours>')
         if 'modified' in kinds:
             for m in md.findall("opf:meta[@property='dcterms:modified']", NS):
                 md.remove(m)

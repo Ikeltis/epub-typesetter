@@ -6,6 +6,7 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 
 from .. import board, engine, epubcheck, kindle, report, txtbook
+from .. import options as opt
 from ..book import NS, Book, EpubError
 from ..pipeline import optimize
 from ..rebuild import REMOVED_ROLES
@@ -153,9 +154,10 @@ def fix(pid: str, mode: str = 'basic') -> None:
     book = Book.load(original)
     ws = load_waivers(pid)
     decisions = board.load(store.path(pid, 'decisions.json'))
+    opts = opt.clean(store.read_json(pid, 'options.json'))
     result = {'mode': mode}
     if mode == 'rebuild':
-        orep = optimize(book, waivers=ws, decisions=decisions)
+        orep = optimize(book, waivers=ws, decisions=decisions, options=opts)
         store.write_json(pid, 'board.json', board.build(orep.analysis, orep.rebuild.head_kind, decisions))
         rep = engine.FixReport(orep.fix.changes + orep.refix.changes, orep.fix.before, orep.refix.after,
                                orep.fix.skipped + orep.refix.skipped)
@@ -205,7 +207,8 @@ def fix(pid: str, mode: str = 'basic') -> None:
         'epubcheck': result['epubcheck'].get('blocking') if result['epubcheck'].get('available') else None,
         'text_ok': result['text']['equal'], 'text': result['text']['summary'],
         'issues': result['after']['total'], 'files': result.get('rebuild', {}).get('files'),
-        'notes': result.get('rebuild', {}).get('notes')})
+        'notes': result.get('rebuild', {}).get('notes'),
+        'options': opt.changed(opts) if mode == 'rebuild' else []})
     store.write_json(pid, 'fix.json', result)
     store.update(pid, status='fixed')
 
@@ -262,7 +265,7 @@ def llm(pid: str, wanted: list[str], prev: str = 'fixed') -> None:
         book = Book.load(store.path(pid, 'original.epub'))
         decisions = board.load(store.path(pid, 'decisions.json'))
         store.update(pid, message='大模型分析：先按当前决定重新分析书的结构（大书要一两分钟）')
-        orep = optimize(book, decisions=decisions)
+        orep = optimize(book, decisions=decisions, options=store.read_json(pid, 'options.json'))
 
         def progress(done, total, note=None):
             if note:

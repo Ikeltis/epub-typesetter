@@ -303,8 +303,9 @@ def _resolve_soft(dst: etree._Element) -> None:
 
 
 class Rebuilder:
-    def __init__(self, book: Book, an: Analysis, theme: str = 'default'):
+    def __init__(self, book: Book, an: Analysis, theme: str = 'default', extra_css: str = ''):
         self.book, self.an, self.theme = book, an, theme
+        self.extra_css = extra_css                    # 按书选项的外观覆盖（options.style_css），追加在样式表最后
         self.rep = RebuildReport()
         self.out_dir = posixpath.dirname(an.blocks[0].doc) if an.blocks else book.opf_dir
         self.css_path = posixpath.join(book.opf_dir, 'styles', 'typesetter.css') if book.opf_dir \
@@ -1501,6 +1502,9 @@ class Rebuilder:
                 css += b'\n' + template_css(name, n).encode('utf-8') + b'\n'
         if self.tpl_used:
             self.rep.log.append('追加模板样式：' + '、'.join(n for n in TEMPLATE_ORDER if n in self.tpl_used))
+        if self.extra_css:
+            css += self.extra_css.encode('utf-8')
+            self.rep.log.append('追加按书选项的外观样式')
         self.rep.suggestions = self.an.suggestions + self.rep.suggestions
         book.add_item(self.css_path, 'text/css', item_id='typesetter-css', data=css)
         self._drop_vendor(css)
@@ -1649,6 +1653,6 @@ class Rebuilder:
         return '\n'.join(x for x in out if x).encode('utf-8')
 
 
-def rebuild(book: Book, analysis: Analysis, theme: str = 'default') -> RebuildReport:
-    return Rebuilder(book, analysis, theme).run()
+def rebuild(book: Book, analysis: Analysis, theme: str = 'default', extra_css: str = '') -> RebuildReport:
+    return Rebuilder(book, analysis, theme, extra_css).run()
 

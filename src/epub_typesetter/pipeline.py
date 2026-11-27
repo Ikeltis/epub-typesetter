@@ -29,7 +29,7 @@ def optimize(book: Book, theme: str = 'default', waivers=None, decisions: dict |
     decisions['features'] = o['features']
     rep0 = engine.fix(book, waivers=waivers)
     an = analyze(book, decisions)
-    rrep = rebuild(book, an, theme, opt.style_css(o))
+    rrep = rebuild(book, an, theme, opt.style_css(o), o['style'])
     book.flush()
     rep1 = engine.fix(book, waivers=waivers)
     return OptimizeReport(rep0, an, rrep, rep1)

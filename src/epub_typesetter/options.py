@@ -25,6 +25,9 @@ STYLE = {              # 键: (说明, {取值: 显示名}, 默认值)
     'paragraph':     ('段落', {'indent': '首行缩进两字', 'spaced': '不缩进，段间空开'}, 'indent'),
     'line_height':   ('行高', {'1.4': '1.4', '1.6': '1.6', '1.8': '1.8', '2.0': '2.0'}, '1.6'),
     'quote_font':    ('引文字体', {'kai': '楷体', 'inherit': '同正文'}, 'kai'),
+    'image_width':   ('插图大小', {'original': '按原书', 'natural': '按图片像素（不超过页宽）', 'full': '撑满页宽',
+                                  '80': '页宽的 80%', '60': '页宽的 60%', '40': '页宽的 40%'}, 'original'),
+    'image_align':   ('插图位置', {'original': '按原书（含文字绕排）', 'center': '一律居中'}, 'original'),
 }
 
 FONTS = {
@@ -89,6 +92,9 @@ def style_css(opts: dict) -> str:
         rules.append(f'body{{ line-height:{s["line_height"]}; }}')
     if s['quote_font'] == 'inherit':
         rules.append('blockquote p{ font-family:inherit; }')
+    if s['image_width'] in ('full', '80', '60', '40'):      # 按原书、按像素时由重建给每张图定类，这里不写
+        w = '100%' if s['image_width'] == 'full' else s['image_width'] + '%'
+        rules.append(f'figure img{{ width:{w}; }}')
     if not rules:
         return ''
     return '\n/* ===== 按书选项（网页「生成」里的自定义外观）===== */\n' + '\n'.join(rules) + '\n'

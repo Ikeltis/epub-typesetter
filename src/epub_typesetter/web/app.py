@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .. import __version__, board, engine, epubcheck, kindle, txtbook
+from .. import options as opt
 from ..llm.client import LLM, LLMError
 from ..llm.settings import LLMSettings
 from ..waivers import WaiverFileError, WaiverSet
@@ -92,7 +93,8 @@ def get_book(pid: str):
     if audit and 'summary' not in audit['issues'] and meta.status not in jobs.BUSY:
         jobs.rescore(pid)                  # 旧版报告格式：按 guide/07 §6 重算一次
     return {'meta': asdict(meta), 'audit': store.read_json(pid, 'audit.json'),
-            'fix': store.read_json(pid, 'fix.json'), 'versions': store.versions(pid), 'summary': jobs.summary(pid)}
+            'fix': store.read_json(pid, 'fix.json'), 'versions': store.versions(pid), 'summary': jobs.summary(pid),
+            'options': opt.clean(store.read_json(pid, 'options.json'))}
 
 
 @app.post('/api/books/{pid}/fix', status_code=202)
@@ -159,6 +161,24 @@ def delete_waiver(pid: str, wid: str):
         raise HTTPException(404, '找不到这条豁免')
     ws.save(store.path(pid, 'waivers.json'))
     jobs.rescore(pid)
+
+
+@app.get('/api/options')
+def options_schema():
+    """排版重建可调的识别开关与外观（供网页生成表单）。"""
+    return {'features': [{'key': k, 'label': v[0], 'off': v[1]} for k, v in opt.FEATURES.items()],
+            'style': [{'key': k, 'label': v[0], 'choices': [{'value': c, 'label': l} for c, l in v[1].items()],
+                       'default': v[2]} for k, v in opt.STYLE.items()],
+            'defaults': opt.defaults()}
+
+
+@app.put('/api/books/{pid}/options')
+def put_options(pid: str, body: dict):
+    """保存这本书的排版重建选项；下次「生成」时生效。"""
+    _meta_or_404(pid)
+    d = opt.clean(body)
+    store.write_json(pid, 'options.json', d)
+    return d
 
 
 @app.get('/api/books/{pid}/board')

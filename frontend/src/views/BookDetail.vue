@@ -6,6 +6,7 @@ import IssueReport from '../components/IssueReport.vue'
 import EpubcheckList from '../components/EpubcheckList.vue'
 import ChangeLog from '../components/ChangeLog.vue'
 import ConfirmBoard from '../components/ConfirmBoard.vue'
+import RebuildOptions from '../components/RebuildOptions.vue'
 import PreviewPanel from '../components/PreviewPanel.vue'
 
 const props = defineProps({ id: String, initialTab: { type: String, default: '' } })
@@ -49,8 +50,9 @@ const pendingDecisions = computed(() => {
 })
 function versionLabel(v) {
   if (v.mode !== 'rebuild') return '仅规范修复'
-  if (!v.decisions) return '排版重建（程序默认）'
-  return `排版重建 + ${v.decisions} 处确认` + (v.llm ? `（含大模型意见 ${v.llm} 处）` : '')
+  const opts = v.options?.length ? ` · ${v.options.join('、')}` : ''
+  if (!v.decisions) return `排版重建（程序默认${opts}）`
+  return `排版重建 + ${v.decisions} 处确认` + (v.llm ? `（含大模型意见 ${v.llm} 处）` : '') + (opts ? `（${opts.slice(3)}）` : '')
 }
 const when = (t) => new Date(t * 1000).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 const previewWant = ref('')
@@ -194,6 +196,7 @@ onUnmounted(() => { clearTimeout(timer); window.removeEventListener('hashchange'
                 <span class="muted small">只修规范错误和伪排版，版面不动</span></label>
               <button class="primary" :disabled="busy" @click="runFix(mode)">生成</button>
             </div>
+            <RebuildOptions v-if="mode === 'rebuild' && data.options" :pid="id" :value="data.options" />
           </div>
         </div>
 

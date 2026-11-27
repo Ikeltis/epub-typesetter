@@ -599,6 +599,13 @@ def analyze(book: Book, decisions: dict | None = None) -> Analysis:
             noterefs.setdefault(target.idx, []).append(a)
             if img_ref:            # 重建时注号图换成编号：图片计数不算它（textcheck）
                 b.attrs['noteref_imgs'] = b.attrs.get('noteref_imgs', 0) + sum(1 for _ in a.iter(X + 'img'))
+    features = decisions.get('features') or {}
+    if features.get('notes') is False:          # 按书选项：注释留在原处，注号与注文都按普通段落、链接照旧
+        for idx in noterefs:
+            blocks[idx].role, blocks[idx].reason = 'para', '按选项：注释留在原处'
+        for b in blocks:
+            b.attrs.pop('noteref_imgs', None)
+        noterefs = {}
     # 配上的注号在重建时换成新编号：文字校验不算原注号的字（[n] 已由校验本身归一，裸数字注号要在这里去掉）
     ref_ids = {id(a) for refs in noterefs.values() for a in refs}
     for b in blocks:
@@ -782,6 +789,10 @@ def analyze(book: Book, decisions: dict | None = None) -> Analysis:
             b.role, b.reason = 'keep', f'<{_local(b.el.tag)}> 原样保留'
         elif _local(b.el.tag) == 'blockquote':
             b.role, b.reason = 'quote', '原有 <blockquote>'
+    if features.get('toc_page') is False:       # 按书选项：保留书内目录页，条目按普通段落（链接改指新文件）
+        for b in blocks:
+            if b.role == 'toc':
+                b.role, b.reason = 'para', '按选项：保留书内目录页'
     apply_cluster_roles(blocks, decisions.get('clusters') or {})
     apply_block_roles(blocks, decisions.get('heads') or {}, decisions.get('matter') or {})
     apply_titles(blocks, decisions.get('titles') or {})

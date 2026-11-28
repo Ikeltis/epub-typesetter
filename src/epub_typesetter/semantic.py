@@ -793,6 +793,13 @@ def analyze(book: Book, decisions: dict | None = None) -> Analysis:
             b.role, b.reason = 'keep', f'<{_local(b.el.tag)}> 原样保留'
         elif _local(b.el.tag) == 'blockquote':
             b.role, b.reason = 'quote', '原有 <blockquote>'
+    # 原书正文与章末注释之间的分隔线：注释搬到书末后，这条线就孤零零留在章末，删去
+    for b in blocks:
+        if _local(b.el.tag) != 'hr' or b.role not in ('keep', 'para'):
+            continue
+        nxt = next((x for x in blocks[b.idx + 1:] if x.doc == b.doc and x.role != 'heading-merged'), None)
+        if nxt is not None and nxt.role in ('note', 'note-head') and noterefs:
+            b.role, b.reason = 'note-sep', '章末注释前的分隔线（注释已移到书末）'
     if features.get('toc_page') is False:       # 按书选项：保留书内目录页，条目按普通段落（链接改指新文件）
         for b in blocks:
             if b.role == 'toc':

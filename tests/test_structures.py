@@ -498,3 +498,13 @@ def test_board_drop_section_only():
 def test_decisions_clean_titles_and_drop():
     d = board.clean({'titles': {'k': '  第一章​　新名\n ', 'e': '   ', 'n': 3}, 'drop': {'k': True, 'j': 'yes'}})
     assert d['titles'] == {'k': '第一章　新名'} and d['drop'] == {'k': True}
+
+
+def test_footnote_separator_hr_dropped_with_notes():
+    """章末注释前的分隔线：注释搬到书末后删去；别处的分隔线保留。"""
+    c1 = ('<h1>第一章</h1>' + P + '<p>正文<a id="r1" href="#n1">(1)</a>。</p>' + P + '<hr/>' + P +
+          '<hr/><p id="n1"><a href="#r1">(1)</a>　注文。</p>')
+    out, rep, _ = rebuild(c1)
+    hrs = [e for r in docs(out).values() for e in r.iter(X + 'hr')]
+    assert len(hrs) == 1 and rep.rebuild.notes == 1
+    assert any(r == 'note-sep' for r, _ in rep.rebuild.removed)

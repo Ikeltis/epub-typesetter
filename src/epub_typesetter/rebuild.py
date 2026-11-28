@@ -42,7 +42,7 @@ XML_LANG = '{http://www.w3.org/XML/1998/namespace}lang'
 KEEP_INLINE = {'a', 'b', 'strong', 'i', 'em', 'sup', 'sub', 'u', 's', 'del', 'ins', 'abbr', 'cite', 'q', 'code',
                'kbd', 'samp', 'ruby', 'rt', 'rp', 'rb', 'small', 'time', 'var', 'dfn', 'mark', 'bdi', 'bdo', 'wbr',
                'br', 'img', 'span'}
-REMOVED_ROLES = {'toc', 'note-head', 'junk', 'cover', 'dropped'}
+REMOVED_ROLES = {'toc', 'note-head', 'junk', 'cover', 'dropped', 'note-sep'}
 # 信的各部分 → (类, epub:type)（04 §4.8）
 LETTER_PARTS = {'salutation-pre': ('salutation', 'z3998:salutation'), 'salutation': ('salutation', 'z3998:salutation'),
                 'valediction': (None, 'z3998:valediction'), 'closing': ('closing', 'z3998:valediction'),

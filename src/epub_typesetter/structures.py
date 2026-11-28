@@ -169,7 +169,7 @@ class _Ctx:
         return self.blocks[j] if 0 <= j < len(self.blocks) and self.blocks[j].doc == b.doc else None
 
 
-_GONE = {'toc', 'note-head', 'junk', 'cover', 'dropped'}   # 重建时删掉的角色（同 rebuild.REMOVED_ROLES）
+_GONE = {'toc', 'note-head', 'junk', 'cover', 'dropped', 'note-sep'}   # 重建时删掉的角色（同 rebuild.REMOVED_ROLES）
 
 
 # ---------- 诗歌 ----------

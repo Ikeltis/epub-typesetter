@@ -508,3 +508,77 @@ def test_footnote_separator_hr_dropped_with_notes():
     hrs = [e for r in docs(out).values() for e in r.iter(X + 'hr')]
     assert len(hrs) == 1 and rep.rebuild.notes == 1
     assert any(r == 'note-sep' for r, _ in rep.rebuild.removed)
+
+
+# ---------- 题记、献辞（04 §4.6.2、4.6.3、4.6.5）----------
+from conftest import OPF2  # noqa: E402
+
+EPI = ('<p>事莫明于有效，论莫定于有证。</p><p>——王充《论衡》</p>'
+       '<p>社会进程本是整体，密不可分。所谓经济，不过是研究者从这洪流中人工提炼出的部分事实。</p>'
+       '<p>——约瑟夫·熊彼特《经济发展理论》</p>')
+
+
+def front_book(options: dict | None = None):
+    opf = OPF2.replace('<item id="c1"', '<item id="f1" href="Text/f1.xhtml" media-type="application/xhtml+xml"/>'
+                       '<item id="f2" href="Text/f2.xhtml" media-type="application/xhtml+xml"/>'
+                       '<item id="f3" href="Text/f3.xhtml" media-type="application/xhtml+xml"/><item id="c1"')
+    opf = opf.replace('<spine toc="ncx">', '<spine toc="ncx"><itemref idref="f1"/><itemref idref="f2"/><itemref idref="f3"/>')
+    files = {'OEBPS/content.opf': opf,
+             'OEBPS/Text/f1.xhtml': XHTML11.format(title='版权', body='<p>图书在版编目（CIP）数据</p><p>ISBN 978-7-0000-0000-0</p>'),
+             'OEBPS/Text/f2.xhtml': XHTML11.format(title='献辞', body='<p>献给我的父亲母亲</p>'),
+             'OEBPS/Text/f3.xhtml': XHTML11.format(title='题记', body=EPI),
+             'OEBPS/Text/c1.xhtml': XHTML11.format(title='第一章', body='<h1>第一章</h1>' + P * 3),
+             'OEBPS/Text/c2.xhtml': XHTML11.format(title='第二章', body='<h1>第二章</h1>' + P)}
+    b = Book.load(make_epub(files))
+    rep = optimize(b, options=options)
+    data = b.to_bytes()
+    out = Book.load(data)
+    bc = compare_blocks(rep.analysis.blocks, REMOVED_ROLES, out)
+    assert bc.ok, bc.missing
+    if shutil.which('epubcheck'):
+        assert epubcheck.blocking(epubcheck.run_bytes(data)) == 0
+    return out
+
+
+def test_headless_front_pages_split_with_semantics():
+    out = front_book()
+    _, ded = find(out, lambda e: e.get(EPUB_T) == 'dedication')
+    assert ded is not None and 'no-head' in ded.get('class') and ded.get('role') == 'doc-dedication'
+    assert ''.join(ded.itertext()).strip() == '献给我的父亲母亲'
+    epath, epi = find(out, lambda e: 'epigraph-page' in (e.get('class') or ''))
+    assert epi is not None and dpath_differs(out, ded, epath)
+    quotes = epi.findall(X + 'blockquote')
+    assert len(quotes) == 2
+    assert all(q[-1].get('class') == 'attribution' for q in quotes)
+    _, cp = find(out, lambda e: e.get(EPUB_T) == 'copyright-page')
+    assert cp is not None and 'ISBN' in ''.join(cp.itertext())
+    c = css(out)
+    assert 'p.attribution' in c and 'section.dedication' in c and 'section.no-head' in c
+
+
+def dpath_differs(book, el, path) -> bool:
+    """el 与 path 不在同一个文件里（各自单独成页）。"""
+    return el.getroottree().getroot() is not book.tree(path).getroot()
+
+
+def test_epigraph_after_chapter_heading():
+    c1 = '<h1>第一章</h1><p>天下大势，分久必合。</p><p>——《三国演义》</p>' + P * 3
+    out, _, _ = rebuild(c1)
+    _, q = find(out, lambda e: e.tag == X + 'blockquote' and e.get(EPUB_T) == 'epigraph')
+    assert q is not None and q.get('class') == 'epigraph' and q.get('role') == 'doc-epigraph'
+    assert q[-1].get('class') == 'attribution'
+
+
+def test_epigraph_feature_off_keeps_plain_paragraphs():
+    out = front_book({'features': {'epigraph': False}})
+    assert find(out, lambda e: e.get(EPUB_T) in ('dedication', 'epigraph'))[1] is None
+    assert find(out, lambda e: e.tag == X + 'p' and e.text == '——王充《论衡》')[1] is not None
+
+
+def test_centered_dedicatee_not_part_of_epigraph():
+    """献辞页：居中的受献人一行不并进题记。"""
+    c1 = ('<h1>献给</h1><p style="text-align:center">安娜</p><p>一粒麦子落在地里如若不死，仍旧是一粒。</p>'
+          '<p>——《约翰福音》</p>' + P)
+    out, _, _ = rebuild(c1)
+    _, q = find(out, lambda e: e.tag == X + 'blockquote' and e.get(EPUB_T) == 'epigraph')
+    assert q is not None and '安娜' not in ''.join(q.itertext())

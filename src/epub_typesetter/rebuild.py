@@ -64,7 +64,7 @@ MATTER_TYPES = {'preface': ('preface', 'doc-preface'), 'foreword': ('foreword', 
                 'bibliography': ('bibliography', 'doc-bibliography'), 'glossary': ('glossary', 'doc-glossary'),
                 'dedication': ('dedication', 'doc-dedication'), 'epigraph': ('epigraph', 'doc-epigraph'),
                 'copyright': ('copyright-page', None)}
-TEMPLATE_ORDER = ('poem', 'letter', 'script', 'article', 'list', 'figure', 'loi', 'table', 'glossary')
+TEMPLATE_ORDER = ('no-head', 'quote', 'epigraph', 'dedication', 'poem', 'letter', 'script', 'article', 'list', 'figure', 'loi', 'table', 'glossary')
 WS_LEAD = ' \t\r\n\u3000\u00a0\u2002\u2003'
 PAGE_TAIL = re.compile(r'[\s.．·…⋯—_-]*\d+\s*$')
 
@@ -84,8 +84,10 @@ class Chapter:
     path: str = ''
     epub_type: str = 'chapter'
     role: str | None = 'doc-chapter'
-    kind: str = 'chapter'                 # chapter / part / front（第一个标题之前的内容）/ loi / lot
+    kind: str = 'chapter'                 # chapter / part / front（第一个标题之前的内容）/ loi / lot / page
     level: int = 2                        # 本文件首标题输出的 h 数字
+    page: str = ''                        # 无标题页：epigraph（整页题记）、dedication（献辞）
+    unit: int = -1                        # 整页题记、献辞对应的成组结构
 
 
 @dataclass
@@ -485,11 +487,28 @@ class Rebuilder:
         cur = None
         self.plan_headings()
         self.drop_chapters()
+        # 第一个部、章标题之前是前置部分：原书一个文件一页（版权页、献辞、题记各自成页），重建时照样分开
+        first_main = min((i for i, (_, _, k) in self.head_out.items() if k in ('part', 'chapter')), default=None)
         for b in self.an.blocks:
             if b.role in REMOVED_ROLES:
                 self.rep.removed.append((b.role, b.text))
                 continue
             out = self.head_out.get(b.idx) if b.role == 'heading' else None
+            unit = self.an.units.get(b.unit) if b.unit >= 0 else None
+            page = unit['kind'] if unit and (unit['kind'] == 'dedication' or unit.get('page')) else ''
+            if page and (cur is None or cur.unit != b.unit):
+                cur = Chapter('', kind='page', epub_type=page, role=f'doc-{page}', page=page, unit=b.unit)
+                chapters.append(cur)
+                cur.blocks.append(b)
+                continue
+            if cur is not None and cur.kind == 'page' and b.unit != cur.unit and \
+                    not (out is not None and out[2] in ('part', 'chapter')):
+                cur = Chapter('', kind='front')        # 题记、献辞页之后、下一个标题之前的内容
+                chapters.append(cur)
+            elif cur is not None and cur.kind == 'front' and first_main is not None and b.idx < first_main \
+                    and cur.blocks and b.doc != cur.blocks[-1].doc and out is None:
+                cur = Chapter('', kind='front')        # 前置部分换了原文件：另起一页
+                chapters.append(cur)
             if b.role == 'loi-head':                  # 插图（表格）目录自成一个文件（04 4.11.4.4）
                 kind = self.an.units[b.unit]['kind']
                 cur = Chapter(b.text, kind=kind, epub_type=kind, role=None)
@@ -515,8 +534,18 @@ class Rebuilder:
             matter = ch.blocks[0].attrs.get('matter') if ch.blocks else None
             if matter and ch.kind not in ('loi', 'lot'):    # 确认板上指定的辅文类型（08 决策 D5）
                 ch.epub_type, ch.role = MATTER_TYPES[matter]
+            if ch.kind == 'front' and ch.epub_type == 'chapter' and first_main is not None and \
+                    ch.blocks and ch.blocks[0].idx < first_main:
+                # 前置部分里没有标题的页：版权页按内容认，其余标前置部分（不再冒充「第 N 章」）
+                txt = ''.join(b.text for b in ch.blocks)
+                if re.search(r'ISBN|CIP|版权所有|版权信息|出版发行|图书在版编目', txt):
+                    ch.epub_type, ch.role = 'copyright-page', None
+                else:
+                    ch.epub_type, ch.role = 'frontmatter', None
             if ch.kind in ('loi', 'lot'):
                 name = ch.kind
+            elif ch.epub_type == 'frontmatter':
+                name = 'front'
             elif ch.kind == 'part':
                 ch.epub_type, ch.role = 'part', 'doc-part'
                 n_part = sum(1 for c in chapters[:chapters.index(ch) + 1] if c.kind == 'part')
@@ -1001,6 +1030,14 @@ class Rebuilder:
                                                          EPUB + 'type': ch.epub_type})
             if ch.role:
                 sec.set('role', ch.role)
+            if ch.page:                                # 无标题页（04 4.2.3、4.6.3、4.6.5）：no-head、aria-label
+                info = self.an.units.get(ch.unit, {})
+                cls = ['no-head', 'epigraph-page' if ch.page == 'epigraph' else
+                       ('' if info.get('long') or info.get('right') else 'dedication')]
+                sec.set('class', ' '.join(c for c in cls if c))
+                sec.set('aria-label', '题词' if ch.page == 'epigraph' else '献词')
+                body.set(EPUB + 'type', 'frontmatter')
+                self.tpl_used.update({'no-head', 'quote', 'epigraph' if ch.page == 'epigraph' else 'dedication'})
         blocks = ch.blocks
         i = 0
         out, cur_box = sec, None                      # out：当前往里放的容器（信纸框里就是框）
@@ -1018,6 +1055,33 @@ class Rebuilder:
             if box_id is not None and b.role == 'quote':    # 信里不再嵌 blockquote（04 4.8.1.3）
                 b.role = 'para'
             if b.role == 'heading-merged':            # 已并入相邻标题
+                i += 1
+                continue
+            if b.role == 'epigraph':                  # 题记：每组「引语 + 出处」一个 blockquote（04 4.6.2、4.6.3）
+                info = self.an.units.get(b.unit, {})
+                j = i
+                while j < len(blocks) and blocks[j].unit == b.unit and blocks[j].attrs.get('group') == b.attrs.get('group'):
+                    j += 1
+                bq = _el('blockquote') if info.get('page') else \
+                    _el('blockquote', {'class': 'epigraph', EPUB + 'type': 'epigraph', 'role': 'doc-epigraph'})
+                for x in blocks[i:j]:
+                    self.cur_doc = x.doc
+                    p = _el('p', {'class': 'attribution' if x.part == 'attribution' else None})
+                    self.inline(x.el, p)
+                    self._anchors(x, p)
+                    bq.append(p)
+                out.append(bq)
+                self.tpl_used.update({'quote', 'epigraph'})
+                self.rep.structures[('题记', info.get('level', 'B'))] += 1 if b.attrs.get('group') == 0 else 0
+                i = j
+                continue
+            if b.role == 'dedication':                # 献辞：普通段落，版式由 section 的类决定；原书右对齐照留
+                p = _el('p', {'class': 'align-right' if self.an.units.get(b.unit, {}).get('right') else None})
+                self.cur_doc = b.doc
+                self.inline(b.el, p)
+                self._anchors(b, p)
+                out.append(p)
+                self.rep.structures[('献辞', 'B')] += 1 if b.part == 'line' and b is blocks[i] and i == 0 else 0
                 i += 1
                 continue
             if b.role == 'note-cont':

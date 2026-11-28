@@ -1,0 +1,4 @@
+/* tpl:quote（04） */
+blockquote + p.noindent{ margin-top:.75em; }
+p.attribution{ margin:.4em 0 0; text-indent:0; text-align:right; font-size:.875em; }
+blockquote p.attribution{ font-family:inherit; }

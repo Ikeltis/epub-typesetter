@@ -775,6 +775,93 @@ def detect_letter_boxes(ctx: _Ctx) -> None:
             first.role, first.unit, first.part, first.reason = 'letter', u, 'salutation', '信纸里的称谓'
 
 
+# ---------- 题记、献辞（04 §4.6.2、4.6.3、4.6.5） ----------
+
+ATTRIB = re.compile(r'^[—－-]{1,2}\s*\S')                 # 出处行：——王充《论衡》
+DEDICATION = re.compile(r'^(谨以此书|谨将此书|此书|本书)?(献给|题献给|纪念|致)')
+
+
+def _epigraph_groups(bs: list) -> list[list] | None:
+    """把一串块切成「引语若干段 + 出处一行」的组；有一段不合规就不算题记。"""
+    groups, cur = [], []
+    for b in bs:
+        if ATTRIB.match(b.text) and len(b.text) <= 60:
+            if not cur:
+                return None
+            groups.append(cur + [b])
+            cur = []
+        elif len(b.text) <= 300 and b.el.find('.//' + X + 'img') is None:
+            cur.append(b)
+        else:
+            return None
+    if cur or not groups or any(len(g) > 4 for g in groups):
+        return None
+    return groups
+
+
+def _mark_epigraph(ctx: _Ctx, groups: list[list], page: bool, level: str) -> None:
+    u = ctx.unit('epigraph', groups[0][0], level=level, page=page)
+    for k, g in enumerate(groups):
+        for b in g:
+            b.role, b.unit, b.attrs['group'] = 'epigraph', u, k
+            b.part = 'attribution' if b is g[-1] else 'quote'
+            b.reason = '整页题记' if page else '章首题记'
+
+
+def detect_epigraphs(ctx: _Ctx) -> None:
+    """整页题记、献辞：一个原文件里没有标题，只有「引语 + ——出处」若干组，或一两行「献给……」。
+    章首题记：章、节标题之后紧跟一到三段短引语，再一行出处。"""
+    by_doc: dict[str, list] = {}
+    for b in ctx.blocks:
+        by_doc.setdefault(b.doc, []).append(b)
+    for doc, bs in by_doc.items():
+        if any(b.role in ('heading', 'heading-merged') for b in bs):
+            continue
+        body = [b for b in bs if b.role not in _GONE and b.text]
+        if not body or any(b.unit >= 0 or b.role not in PLAIN for b in body):
+            continue
+        if any(b.role == 'figure' for b in bs):
+            continue
+        groups = _epigraph_groups(body) if len(body) <= 12 else None
+        if groups:
+            _mark_epigraph(ctx, groups, True, 'B')
+            continue
+        total = sum(len(b.text) for b in body)
+        if len(body) <= 3 and DEDICATION.match(body[0].text) and total <= 300:
+            u = ctx.unit('dedication', body[0], level='B', long=len(body) >= 2 or total > 100,
+                         right=all(b.role == 'right' or b.align == 'right' for b in body))
+            for b in body:
+                b.role, b.unit, b.part, b.reason = 'dedication', u, 'line', '献辞页'
+    # 章首题记
+    blocks = ctx.blocks
+    for h in blocks:
+        if h.role != 'heading':
+            continue
+        run, j = [], h.idx + 1
+        while j < len(blocks) and blocks[j].doc == h.doc and len(run) < 4:
+            c = blocks[j]
+            if c.role == 'heading-merged':
+                j += 1
+                continue
+            if c.unit >= 0 or c.role not in PLAIN or not c.text:
+                break
+            j += 1
+            if not ATTRIB.match(c.text) and (c.role == 'center' or c.align == 'center'):
+                run = []                                      # 居中短行（如献辞页的受献人）不算引语，题记从它之后起
+                continue
+            run.append(c)
+            if ATTRIB.match(c.text):
+                break
+        if len(run) < 2 or not ATTRIB.match(run[-1].text) or len(run[-1].text) > 40:
+            continue
+        if sum(len(b.text) for b in run[:-1]) > 120:          # 04 4.6.2.2：章首题记不超过 80 字，放宽一点
+            continue
+        nxt = blocks[j] if j < len(blocks) else None
+        if nxt is None or nxt.doc != h.doc:                    # 后面没正文：多半是整页题记的写法，不按章首处理
+            continue
+        _mark_epigraph(ctx, [run], False, 'B')
+
+
 def detect(book: Book, an, decisions: dict | None = None) -> None:
     ctx = _Ctx(book, an)
     detect_source_lists(ctx)
@@ -783,6 +870,7 @@ def detect(book: Book, an, decisions: dict | None = None) -> None:
     detect_poems(ctx)
     detect_letters(ctx)
     detect_letter_boxes(ctx)                  # 在书信识别之后：框里没认成信的，才按称谓补
+    detect_epigraphs(ctx)
     detect_lists(ctx)
     detect_tables(ctx)
     detect_glossary(ctx)

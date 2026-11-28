@@ -26,7 +26,7 @@ HEAD_KINDS = ('part', 'chapter', 'section', 'subsection', 'para')
 DECISIONS_VERSION = 1
 ROLE_LABELS = {'para': '正文', 'quote': '引文', 'center': '居中短行', 'right': '右对齐', 'chapter': '章标题',
                'section': '节标题', 'junk': '删除', 'meta': '版权信息'}
-KIND_LABELS = {'poem': '诗歌', 'letter': '书信', 'ol': '有序列表', 'dl': '定义列表', 'item': '序号项',
+KIND_LABELS = {'epigraph': '题记', 'dedication': '献辞页', 'poem': '诗歌', 'letter': '书信', 'ol': '有序列表', 'dl': '定义列表', 'item': '序号项',
                'article': '条文', 'loi': '插图目录', 'lot': '表格目录',
                's-poem': '疑似诗歌', 's-script': '剧本对白', 's-glossary': '术语表成行文本', 's-table': '表格合计行',
                's-loi': '插图目录', 'gloss': '术语表条目', 'script': '剧本',
